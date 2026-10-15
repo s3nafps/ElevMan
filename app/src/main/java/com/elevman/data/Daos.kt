@@ -34,6 +34,9 @@ interface ManualDao {
 
     @Query("SELECT * FROM ManualEntity WHERE fileHash = :hash LIMIT 1")
     suspend fun findByHash(hash: String): ManualEntity?
+
+    @Query("SELECT * FROM ManualEntity WHERE id = :id LIMIT 1")
+    suspend fun findById(id: String): ManualEntity?
 }
 
 @Dao

@@ -12,6 +12,10 @@ import java.security.MessageDigest
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -149,5 +153,32 @@ class ManualStoreTest {
         store.store(ByteArrayInputStream("%PDF".toByteArray()), "model-1", "Title")
 
         assertTrue(File(filesDir, "manuals").isDirectory)
+    }
+
+    @Test
+    fun cancellationDuringInsertStillRecordsTheManualAndKeepsItsFile() = runTest {
+        // The caller is cancelled while the row is being inserted. The insert must still finish,
+        // otherwise the cleanup would delete the file of a row that may have been committed.
+        val real = db.manualDao()
+        lateinit var caller: Deferred<StoreOutcome>
+        val cancellingDao = object : ManualDao by real {
+            override suspend fun upsertAll(rows: List<ManualEntity>) {
+                caller.cancel()
+                real.upsertAll(rows)
+            }
+        }
+        val cancellableStore = ManualStore(filesDir, cancellingDao, clock, newId = { "manual-1" })
+
+        caller = async(Dispatchers.Default) {
+            cancellableStore.store(ByteArrayInputStream("%PDF cancelled".toByteArray()), "model-1", "Title")
+        }
+        try {
+            caller.await()
+        } catch (expected: CancellationException) {
+            // The caller was cancelled, which is the point of this test.
+        }
+
+        assertEquals(listOf("manual-1"), db.manualDao().getAll().map { it.id })
+        assertEquals(listOf("manual-1.pdf"), manualsDirFileNames())
     }
 }

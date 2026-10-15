@@ -7,6 +7,7 @@ import java.security.MessageDigest
 import java.time.Clock
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
 sealed interface StoreOutcome {
@@ -57,19 +58,23 @@ class ManualStore(
                 Files.move(temp.toPath(), finalFile.toPath())
                 target = finalFile
 
-                dao.upsertAll(
-                    listOf(
-                        ManualEntity(
-                            id = id,
-                            modelId = modelId,
-                            title = title,
-                            fileHash = hash,
-                            pageCount = 0,
-                            updatedAt = clock.millis(),
+                // Not cancellable: a cancelled insert can still commit, and the cleanup below
+                // would then delete the file of a row that exists.
+                withContext(NonCancellable) {
+                    dao.upsertAll(
+                        listOf(
+                            ManualEntity(
+                                id = id,
+                                modelId = modelId,
+                                title = title,
+                                fileHash = hash,
+                                pageCount = 0,
+                                updatedAt = clock.millis(),
+                            ),
                         ),
-                    ),
-                )
-                recorded = true
+                    )
+                    recorded = true
+                }
                 StoreOutcome.Stored(id, finalFile)
             } finally {
                 // No-op once the temp file has been moved; covers duplicate, failure and cancellation.
