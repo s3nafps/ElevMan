@@ -46,6 +46,12 @@ interface ErrorCodeDao {
 
     @Query("SELECT * FROM ErrorCodeEntity")
     suspend fun getAll(): List<ErrorCodeEntity>
+
+    @Query("SELECT * FROM ErrorCodeEntity WHERE id = :id LIMIT 1")
+    suspend fun findById(id: String): ErrorCodeEntity?
+
+    @Query("SELECT * FROM ErrorCodeEntity WHERE manualId = :manualId AND status = :status")
+    suspend fun findByManualAndStatus(manualId: String, status: ReviewStatus): List<ErrorCodeEntity>
 }
 
 @Dao
@@ -55,6 +61,12 @@ interface MaintenanceTaskDao {
 
     @Query("SELECT * FROM MaintenanceTaskEntity")
     suspend fun getAll(): List<MaintenanceTaskEntity>
+
+    @Query("SELECT * FROM MaintenanceTaskEntity WHERE id = :id LIMIT 1")
+    suspend fun findById(id: String): MaintenanceTaskEntity?
+
+    @Query("SELECT * FROM MaintenanceTaskEntity WHERE manualId = :manualId AND status = :status")
+    suspend fun findByManualAndStatus(manualId: String, status: ReviewStatus): List<MaintenanceTaskEntity>
 }
 
 @Dao
