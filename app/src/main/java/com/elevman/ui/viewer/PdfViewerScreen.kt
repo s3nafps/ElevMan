@@ -53,7 +53,7 @@ import androidx.compose.ui.unit.dp
 import com.elevman.AppContainer
 import com.elevman.pdf.PageText
 import java.io.FileNotFoundException
-import java.io.IOException
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -62,7 +62,7 @@ private const val RENDER_SCALE = 2
 private const val MAX_ZOOM = 4f
 
 internal const val PDF_MISSING_MESSAGE = "This manual's PDF is missing from the phone."
-internal const val PDF_UNREADABLE_MESSAGE = "Could not open this manual's PDF."
+internal const val PDF_UNREADABLE_MESSAGE = "This manual could not be opened."
 internal const val TEXT_FAILED_MESSAGE = "Could not read this manual's text."
 internal const val PAGE_FAILED_MESSAGE = "This page could not be drawn."
 
@@ -118,10 +118,12 @@ fun PdfViewerScreen(
             if (pageCount > 0) Document.Open(pageCount) else Document.Unreadable
         } catch (e: FileNotFoundException) {
             Document.Missing
-        } catch (e: IOException) {
-            Document.Unreadable
-        } catch (e: SecurityException) {
-            // A password protected PDF.
+        } catch (e: CancellationException) {
+            // The screen was left; this is not a PDF that will not open.
+            throw e
+        } catch (e: Exception) {
+            // A file that is not a PDF, a damaged one, a password protected one, or one the
+            // renderer throws a RuntimeException for. None of them may crash the app.
             Document.Unreadable
         }
     }
