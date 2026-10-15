@@ -89,6 +89,10 @@ dependencies {
     // Compose UI tests also run on the JVM under Robolectric (no emulator needed).
     testImplementation(platform(libs.androidx.compose.bom))
     testImplementation(libs.androidx.compose.ui.test.junit4)
+    // Asked for by the Task 1 review for a release unit-test variant. AGP 9.4 does not create that
+    // variant (there is only testDebugUnitTest), and createComposeRule() gets its ComponentActivity
+    // from debugImplementation below, so this line has no effect today.
+    testImplementation(libs.androidx.compose.ui.test.manifest)
 
     // Instrumented tests (need a device or emulator running Android 10 or later).
     androidTestImplementation(platform(libs.androidx.compose.bom))
