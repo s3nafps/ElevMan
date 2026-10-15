@@ -79,6 +79,9 @@ interface ElevatorDao {
 
     @Query("SELECT * FROM ElevatorEntity")
     suspend fun getAll(): List<ElevatorEntity>
+
+    @Query("SELECT * FROM ElevatorEntity WHERE id = :id LIMIT 1")
+    suspend fun findById(id: String): ElevatorEntity?
 }
 
 @Dao
@@ -88,6 +91,12 @@ interface ElevatorTaskDao {
 
     @Query("SELECT * FROM ElevatorTaskEntity")
     suspend fun getAll(): List<ElevatorTaskEntity>
+
+    @Query("SELECT * FROM ElevatorTaskEntity WHERE id = :id LIMIT 1")
+    suspend fun findById(id: String): ElevatorTaskEntity?
+
+    @Query("SELECT * FROM ElevatorTaskEntity WHERE elevatorId = :elevatorId")
+    suspend fun findByElevatorId(elevatorId: String): List<ElevatorTaskEntity>
 }
 
 @Dao
@@ -97,4 +106,7 @@ interface LogEntryDao {
 
     @Query("SELECT * FROM LogEntryEntity")
     suspend fun getAll(): List<LogEntryEntity>
+
+    @Query("SELECT * FROM LogEntryEntity WHERE elevatorId = :elevatorId")
+    suspend fun findByElevatorId(elevatorId: String): List<LogEntryEntity>
 }
