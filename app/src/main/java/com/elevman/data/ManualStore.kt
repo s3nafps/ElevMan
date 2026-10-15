@@ -10,6 +10,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
+/** The folder that holds every imported PDF. */
+fun manualsDir(filesDir: File): File = File(filesDir, "manuals")
+
+/** Where the PDF of manual [manualId] lives: `manuals/<manualId>.pdf` under [filesDir]. */
+fun manualPdfFile(filesDir: File, manualId: String): File = File(manualsDir(filesDir), "$manualId.pdf")
+
 sealed interface StoreOutcome {
     /** The PDF was new: it now lives at [file] and has a [ManualEntity] row with id [manualId]. */
     data class Stored(val manualId: String, val file: File) : StoreOutcome
@@ -40,7 +46,7 @@ class ManualStore(
      */
     suspend fun store(source: InputStream, modelId: String, title: String): StoreOutcome =
         withContext(Dispatchers.IO) {
-            val dir = File(filesDir, MANUALS_DIR)
+            val dir = manualsDir(filesDir)
             Files.createDirectories(dir.toPath())
             val temp = File.createTempFile("import-", ".tmp", dir)
             var target: File? = null
@@ -54,7 +60,7 @@ class ManualStore(
                 }
 
                 val id = newId()
-                val finalFile = File(dir, "$id.pdf")
+                val finalFile = manualPdfFile(filesDir, id)
                 Files.move(temp.toPath(), finalFile.toPath())
                 target = finalFile
 
@@ -99,7 +105,6 @@ class ManualStore(
     }
 
     private companion object {
-        const val MANUALS_DIR = "manuals"
         const val BUFFER_SIZE = 64 * 1024
     }
 }

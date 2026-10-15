@@ -3,6 +3,7 @@ package com.elevman.backup
 import androidx.room.withTransaction
 import com.elevman.data.ElevManDatabase
 import com.elevman.data.ManualEntity
+import com.elevman.data.manualPdfFile
 import java.io.File
 import java.io.FilterOutputStream
 import java.io.OutputStream
@@ -87,7 +88,7 @@ class BackupWriter(
         zip.closeEntry()
     }
 
-    private fun manualFile(manual: ManualEntity): File = File(File(filesDir, "manuals"), "${manual.id}.pdf")
+    private fun manualFile(manual: ManualEntity): File = manualPdfFile(filesDir, manual.id)
 
     /** Passes writes through and turns `close()` into a flush. */
     private class NonClosingOutputStream(out: OutputStream) : FilterOutputStream(out) {

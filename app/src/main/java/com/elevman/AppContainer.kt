@@ -11,6 +11,8 @@ import com.elevman.data.ElevatorRepository
 import com.elevman.data.ManualImporter
 import com.elevman.data.ManualStore
 import com.elevman.data.ReviewRepository
+import com.elevman.data.manualPdfFile
+import com.elevman.pdf.PageTextSource
 import com.elevman.pdf.PdfBoxTextSource
 import java.io.File
 import java.time.Clock
@@ -40,9 +42,15 @@ class AppContainer(context: Context) {
 
     val manualStore: ManualStore = ManualStore(filesDir, db.manualDao(), clock)
 
+    /** Reads the text of PDF pages. One instance, shared by the importer and the PDF viewer. */
+    val pageText: PageTextSource = PdfBoxTextSource()
+
+    /** Where the PDF of manual [manualId] is stored. The file may not exist (it is not checked). */
+    fun manualFile(manualId: String): File = manualPdfFile(filesDir, manualId)
+
     val importer: ManualImporter = ManualImporter(
         store = manualStore,
-        text = PdfBoxTextSource(),
+        text = pageText,
         manuals = db.manualDao(),
         codes = db.errorCodeDao(),
         tasks = db.maintenanceTaskDao(),
