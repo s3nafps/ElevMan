@@ -16,6 +16,9 @@ import kotlin.math.sqrt
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.withContext
 
+/** A page could not be drawn. */
+internal class PageDrawException(message: String, cause: Throwable) : Exception(message, cause)
+
 /**
  * One PDF opened with [PdfRenderer], drawn a page at a time.
  *
@@ -68,6 +71,8 @@ internal class PdfPageRenderer(private val file: File) {
      * Draws page [pageNumber] (1-based) as large as fits inside [maxWidthPx] by [maxHeightPx],
      * on white. The bitmap is cut down if it would be very large, so a big screen cannot run
      * the phone out of memory.
+     *
+     * @throws PageDrawException if there is not enough memory for the bitmap
      */
     suspend fun render(pageNumber: Int, maxWidthPx: Int, maxHeightPx: Int): Bitmap =
         withContext(dispatcher) {
@@ -83,7 +88,13 @@ internal class PdfPageRenderer(private val file: File) {
                     width = (width * shrink).roundToInt().coerceAtLeast(1)
                     height = (height * shrink).roundToInt().coerceAtLeast(1)
                 }
-                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                val bitmap = try {
+                    Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                } catch (e: OutOfMemoryError) {
+                    // The one Error caught: a big page on a small heap is a page that cannot be
+                    // drawn, not a reason to stop the app.
+                    throw PageDrawException("Not enough memory to draw page $pageNumber", e)
+                }
                 try {
                     // PdfRenderer draws onto what is there; a transparent page would show black
                     // text on the dark theme's black.

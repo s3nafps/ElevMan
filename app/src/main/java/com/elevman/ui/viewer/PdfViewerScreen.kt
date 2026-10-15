@@ -64,6 +64,7 @@ private const val MAX_ZOOM = 4f
 internal const val PDF_MISSING_MESSAGE = "This manual's PDF is missing from the phone."
 internal const val PDF_UNREADABLE_MESSAGE = "Could not open this manual's PDF."
 internal const val TEXT_FAILED_MESSAGE = "Could not read this manual's text."
+internal const val PAGE_FAILED_MESSAGE = "This page could not be drawn."
 
 /** How far the PDF has been opened. */
 private sealed interface Document {
@@ -78,6 +79,13 @@ private sealed interface PageTexts {
     data object Loading : PageTexts
     data class Ready(val pages: List<PageText>) : PageTexts
     data object Failed : PageTexts
+}
+
+/** The picture of the current page, as far as it has got. */
+private sealed interface PageDrawing {
+    data object Loading : PageDrawing
+    data class Drawn(val bitmap: Bitmap) : PageDrawing
+    data object Failed : PageDrawing
 }
 
 /**
@@ -121,10 +129,11 @@ fun PdfViewerScreen(
     // The text of every page, read once and kept while the viewer is open.
     var texts by remember(manualId) { mutableStateOf<PageTexts>(PageTexts.Loading) }
     LaunchedEffect(manualId) {
-        texts = try {
-            PageTexts.Ready(withContext(Dispatchers.IO) { container.pageText.pages(file) })
-        } catch (e: IOException) {
-            PageTexts.Failed
+        // Any failure to read the text (a damaged file, a PDF the library chokes on) leaves the
+        // page viewable; only the search is lost.
+        texts = when (val read = attempt { withContext(Dispatchers.IO) { container.pageText.pages(file) } }) {
+            is Attempt.Done -> PageTexts.Ready(read.value)
+            Attempt.Failed -> PageTexts.Failed
         }
     }
 
@@ -301,9 +310,14 @@ private fun PageImage(
         val widthPx = constraints.maxWidth
         val heightPx = constraints.maxHeight
 
-        val bitmap by produceState<Bitmap?>(initialValue = null, pdf, pageNumber, widthPx, heightPx) {
-            // The last page stays on screen until the next one is drawn.
-            value = pdf.render(pageNumber, widthPx * RENDER_SCALE, heightPx * RENDER_SCALE)
+        val drawing by produceState<PageDrawing>(PageDrawing.Loading, pdf, pageNumber, widthPx, heightPx) {
+            // The last page stays on screen until the next one is drawn, but a failure belongs to
+            // the page that failed, not to the next one.
+            if (value is PageDrawing.Failed) value = PageDrawing.Loading
+            value = when (val drawn = attempt { pdf.render(pageNumber, widthPx * RENDER_SCALE, heightPx * RENDER_SCALE) }) {
+                is Attempt.Done -> PageDrawing.Drawn(drawn.value)
+                Attempt.Failed -> PageDrawing.Failed
+            }
         }
 
         // A new page starts unzoomed.
@@ -320,9 +334,9 @@ private fun PageImage(
             )
         }
 
-        bitmap?.let { shown ->
-            Image(
-                bitmap = shown.asImageBitmap(),
+        when (val shown = drawing) {
+            is PageDrawing.Drawn -> Image(
+                bitmap = shown.bitmap.asImageBitmap(),
                 contentDescription = "Page $pageNumber of ${navigation.pageCount}",
                 contentScale = ContentScale.Fit,
                 modifier = Modifier
@@ -336,6 +350,11 @@ private fun PageImage(
                         translationY = pan.y
                     },
             )
-        } ?: Centered { CircularProgressIndicator() }
+            // The search and the page buttons are outside this box, so they stay usable.
+            PageDrawing.Failed -> Centered {
+                Text(PAGE_FAILED_MESSAGE, style = MaterialTheme.typography.bodyLarge)
+            }
+            PageDrawing.Loading -> Centered { CircularProgressIndicator() }
+        }
     }
 }
