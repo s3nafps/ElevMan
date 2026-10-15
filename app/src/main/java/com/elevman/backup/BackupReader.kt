@@ -1,12 +1,13 @@
 package com.elevman.backup
 
+import java.io.EOFException
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipException
 import java.util.zip.ZipFile
-import kotlinx.serialization.SerializationException
 
 sealed interface ReadResult {
     /**
@@ -55,8 +56,13 @@ class BackupReader(private val stagingRoot: File) {
         val document = readDocument(zip) ?: return ReadResult.Invalid(DAMAGED)
         if (document.version != BACKUP_VERSION) return ReadResult.Invalid(UNSUPPORTED_VERSION)
 
-        val missing = document.manuals.firstOrNull { pdfEntry(zip, it.id) == null }
-        if (missing != null) return ReadResult.Invalid("The PDF for ${missing.title} is missing from the backup.")
+        for (manual in document.manuals) {
+            // The id is data from the file: it must not turn the PDF's path into an unsafe one.
+            if (isUnsafe(backupManualEntryName(manual.id))) return ReadResult.Invalid(UNSAFE_PATH)
+            if (pdfEntry(zip, manual.id) == null) {
+                return ReadResult.Invalid("The PDF for ${manual.title} is missing from the backup.")
+            }
+        }
 
         return stage(zip, document)
     }
@@ -67,12 +73,11 @@ class BackupReader(private val stagingRoot: File) {
         return try {
             val text = zip.getInputStream(entry).use { it.readBytes() }.toString(Charsets.UTF_8)
             BackupJson.decodeFromString(BackupDocument.serializer(), text)
-        } catch (_: SerializationException) {
-            null
         } catch (_: IllegalArgumentException) {
+            // Includes SerializationException.
             null
-        } catch (_: ZipException) {
-            null
+        } catch (e: IOException) {
+            if (e.isDamagedArchive()) null else throw e
         }
     }
 
@@ -83,35 +88,46 @@ class BackupReader(private val stagingRoot: File) {
     /**
      * Extracts the PDFs of [document] into a new directory under [stagingRoot].
      *
-     * Every entry name was vetted by [isUnsafe] and each target is built from
-     * [backupManualEntryName], so no target can lie outside the staging directory.
+     * Every entry name and every manual id was vetted by [isUnsafe], and each target is built from
+     * [backupManualEntryName]. Each target is checked once more here, against the canonical staging
+     * path, before anything is written to it.
      */
     private fun stage(zip: ZipFile, document: BackupDocument): ReadResult {
         val stagingDir = File(stagingRoot, UUID.randomUUID().toString())
         var done = false
         try {
             Files.createDirectories(stagingDir.toPath())
+            val stagingPrefix = stagingDir.canonicalPath + File.separator
             for (manual in document.manuals.distinctBy { it.id }) {
                 val entry = checkNotNull(pdfEntry(zip, manual.id)) { "PDF entry vanished for ${manual.id}" }
                 val target = File(stagingDir, backupManualEntryName(manual.id))
+                if (!target.canonicalPath.startsWith(stagingPrefix)) return ReadResult.Invalid(UNSAFE_PATH)
                 Files.createDirectories(target.toPath().parent)
                 zip.getInputStream(entry).use { input -> target.outputStream().use { input.copyTo(it) } }
             }
             done = true
             return ReadResult.Valid(document, stagingDir)
-        } catch (_: ZipException) {
-            // The archive's own data is bad (for example a corrupt compressed stream).
+        } catch (e: IOException) {
+            // The archive's own data is bad (a corrupt or truncated compressed stream).
+            if (!e.isDamagedArchive()) throw e
             return ReadResult.Invalid(DAMAGED)
         } finally {
             if (!done) stagingDir.deleteRecursively()
         }
     }
 
-    /** True for an entry name that is absolute, has a drive prefix, climbs with `..` or uses a backslash. */
+    /** What [ZipFile] throws for a stream whose own data is bad: corrupt, or cut short. */
+    private fun IOException.isDamagedArchive(): Boolean = this is ZipException || this is EOFException
+
+    /**
+     * True for an entry name that is absolute, has a drive prefix, climbs with `..`, uses a
+     * backslash or holds a NUL character.
+     */
     private fun isUnsafe(name: String): Boolean =
         name.startsWith('/') ||
             '\\' in name ||
             ".." in name ||
+            '\u0000' in name ||
             (name.length >= 2 && name[1] == ':' && name[0].isLetter())
 
     private companion object {

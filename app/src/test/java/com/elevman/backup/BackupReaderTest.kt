@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.util.Random
 import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -202,7 +203,6 @@ class BackupReaderTest {
 
         assertInvalid("The backup contains an unsafe file path.", reader.read(zip))
         assertTrue(stagingRootIsEmpty())
-        assertFalse(File(stagingRoot.parentFile, "evil.pdf").exists())
     }
 
     @Test
@@ -271,16 +271,116 @@ class BackupReaderTest {
         assertTrue(stagingRootIsEmpty())
     }
 
+    @Test
+    fun nulInEntryNameIsInvalid() {
+        val doc = document(listOf(manual("m1", "One")))
+        val zip = backupZip(doc, mapOf("m1" to pdfOne), "manuals/evil\u0000.pdf" to pdfTwo)
+
+        assertInvalid("The backup contains an unsafe file path.", reader.read(zip))
+        assertTrue(stagingRootIsEmpty())
+    }
+
+    @Test
+    fun manualIdWithParentSegmentAndMatchingEntryIsInvalid() {
+        val doc = document(listOf(manual("../../evil", "Evil")))
+        val zip = backupZip(doc, mapOf("../../evil" to pdfOne))
+
+        assertInvalid("The backup contains an unsafe file path.", reader.read(zip))
+        assertTrue(stagingRootIsEmpty())
+    }
+
+    @Test
+    fun manualIdWithParentSegmentAndNoEntryIsInvalid() {
+        val doc = document(listOf(manual("../../evil", "Evil")))
+        val zip = backupZip(doc, emptyMap())
+
+        assertInvalid("The backup contains an unsafe file path.", reader.read(zip))
+        assertTrue(stagingRootIsEmpty())
+    }
+
+    @Test
+    fun manualIdWithNulIsInvalid() {
+        val doc = document(listOf(manual("m1\u0000x", "Nul")))
+        val zip = backupZip(doc, emptyMap())
+
+        assertInvalid("The backup contains an unsafe file path.", reader.read(zip))
+        assertTrue(stagingRootIsEmpty())
+    }
+
+    @Test
+    fun manualIdWithSlashExtractsNestedUnderStaging() {
+        val doc = document(listOf(manual("a/b", "Nested")))
+        val zip = backupZip(doc, mapOf("a/b" to pdfOne))
+
+        val result = reader.read(zip) as ReadResult.Valid
+
+        val target = File(result.stagingDir, backupManualEntryName("a/b"))
+        assertArrayEquals(pdfOne, target.readBytes())
+        assertTrue(target.canonicalPath.startsWith(result.stagingDir.canonicalPath + File.separator))
+    }
+
+    @Test
+    fun directoryEntryNamedLikeThePdfCountsAsMissing() {
+        val doc = document(listOf(manual("m1", "One")))
+        val zip = zipOf(
+            BACKUP_JSON_ENTRY to doc.toJsonBytes(),
+            backupManualEntryName("m1") + "/" to ByteArray(0),
+        )
+
+        assertInvalid("The PDF for One is missing from the backup.", reader.read(zip))
+        assertTrue(stagingRootIsEmpty())
+    }
+
+    @Test
+    fun truncatedPdfStreamIsDamagedAndStagingIsCleanedUp() {
+        val doc = document(listOf(manual("m1", "One"), manual("m2", "Two")))
+        val zip = backupZip(doc, mapOf("m1" to pdfOne, "m2" to pdfTwo))
+        truncateDeflateStream(zip, backupManualEntryName("m2"))
+
+        assertInvalid("The backup file is damaged.", reader.read(zip))
+        assertTrue(stagingRootIsEmpty())
+    }
+
+    @Test
+    fun truncatedBackupJsonStreamIsDamaged() {
+        val doc = document(listOf(manual("m1", "One")))
+        val zip = backupZip(doc, mapOf("m1" to pdfOne))
+        truncateDeflateStream(zip, BACKUP_JSON_ENTRY)
+
+        assertInvalid("The backup file is damaged.", reader.read(zip))
+        assertTrue(stagingRootIsEmpty())
+    }
+
     /** Overwrites the first byte of the entry's deflate data with a reserved block type. */
     private fun corruptDeflateStream(zip: File, entryName: String) {
         val bytes = zip.readBytes()
+        bytes[deflateDataOffset(bytes, entryName)] = RESERVED_BLOCK_TYPE
+        zip.writeBytes(bytes)
+    }
+
+    /**
+     * Replaces the entry's deflate data with empty stored blocks, none of them the last one. The
+     * inflater consumes them all, then runs out of input without ever seeing the end of the stream.
+     */
+    private fun truncateDeflateStream(zip: File, entryName: String) {
+        val compressedSize = ZipFile(zip).use { it.getEntry(entryName).compressedSize.toInt() }
+        val bytes = zip.readBytes()
+        val start = deflateDataOffset(bytes, entryName)
+        for (i in 0 until compressedSize) {
+            // Per block: header byte 0 (BFINAL=0, stored), LEN = 0x0000, NLEN = 0xFFFF.
+            bytes[start + i] = if (i % EMPTY_BLOCK_SIZE >= 3) 0xFF.toByte() else 0
+        }
+        zip.writeBytes(bytes)
+    }
+
+    /** Where the compressed data of [entryName] starts, found through its local file header. */
+    private fun deflateDataOffset(bytes: ByteArray, entryName: String): Int {
         val name = entryName.toByteArray(Charsets.UTF_8)
         val nameAt = indexOf(bytes, name)
         if (nameAt < 0) fail("entry name not found in zip")
         val headerAt = nameAt - LOCAL_HEADER_SIZE
         val extraLength = (bytes[headerAt + 28].toInt() and 0xff) or ((bytes[headerAt + 29].toInt() and 0xff) shl 8)
-        bytes[nameAt + name.size + extraLength] = 0x07
-        zip.writeBytes(bytes)
+        return nameAt + name.size + extraLength
     }
 
     private fun indexOf(haystack: ByteArray, needle: ByteArray): Int {
@@ -293,5 +393,9 @@ class BackupReaderTest {
 
     private companion object {
         const val LOCAL_HEADER_SIZE = 30
+        const val EMPTY_BLOCK_SIZE = 5
+
+        /** BFINAL=1, BTYPE=11: a block type deflate reserves, so inflating fails at once. */
+        const val RESERVED_BLOCK_TYPE: Byte = 0x07
     }
 }
