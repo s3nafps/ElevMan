@@ -138,7 +138,11 @@ class CodeSearchTest {
     @Test
     fun emptyQueryReturnsNothing() = runTest {
         seedModels("m-a" to "Alpha 100")
-        seedCodes(code("c1", "m-a"))
+        // "-" normalizes to "", so without the blank-key guard these queries would match it.
+        seedCodes(
+            code("c1", "m-a"),
+            code("c2", "m-a", code = "-"),
+        )
 
         assertTrue(search.search("").isEmpty())
         assertTrue(search.search("   ").isEmpty())
@@ -162,6 +166,38 @@ class CodeSearchTest {
         assertEquals(
             listOf("E 21" to 50, "E-21" to 5, "E-21" to 30, "E21" to 1),
             hits.map { it.code to it.pageNumber },
+        )
+    }
+
+    @Test
+    fun sameEverythingElseOrderedByManualId() = runTest {
+        seedModels("m-a" to "Alpha 100")
+        // Inserted in reverse order, and identical in status, model name, code and page.
+        seedCodes(
+            code("c1", "m-a", manualId = "manual-c", page = 7),
+            code("c2", "m-a", manualId = "manual-a", page = 7),
+            code("c3", "m-a", manualId = "manual-b", page = 7),
+        )
+
+        val hits = search.search("E21")
+
+        assertEquals(listOf("manual-a", "manual-b", "manual-c"), hits.map { it.manualId })
+    }
+
+    @Test
+    fun codeWithMissingModelIsKeptWithEmptyModelName() = runTest {
+        seedModels("m-a" to "Alpha 100")
+        // "m-gone" has no ElevatorModelEntity row; there are no foreign keys to prevent that.
+        seedCodes(
+            code("c1", "m-a", meaning = "Known model"),
+            code("c2", "m-gone", meaning = "Unknown model"),
+        )
+
+        val hits = search.search("E21")
+
+        assertEquals(
+            listOf("Unknown model" to "", "Known model" to "Alpha 100"),
+            hits.map { it.meaning to it.modelName },
         )
     }
 }
