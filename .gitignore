@@ -1,0 +1,17 @@
+# Gradle
+.gradle/
+build/
+
+# Local machine configuration (SDK path)
+local.properties
+
+# IDE
+.idea/
+*.iml
+.kotlin/
+
+# OS
+.DS_Store
+
+# Native build
+.cxx/
