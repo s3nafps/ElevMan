@@ -38,6 +38,11 @@ android {
         unitTests {
             // Robolectric needs merged resources and the manifest on the unit-test classpath.
             isIncludeAndroidResources = true
+            all {
+                // Robolectric's Android 16/17 framework shadows reach into JDK internals
+                // (jdk.internal.access.SharedSecrets) and fail on JDK 17+ without this flag.
+                it.jvmArgs("--add-opens=java.base/jdk.internal.access=ALL-UNNAMED")
+            }
         }
     }
 }
@@ -77,8 +82,13 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core.ktx)
+    testImplementation(libs.androidx.test.ext.junit)
     testImplementation(libs.androidx.room.testing)
     testImplementation(libs.kotlinx.coroutines.test)
+
+    // Compose UI tests also run on the JVM under Robolectric (no emulator needed).
+    testImplementation(platform(libs.androidx.compose.bom))
+    testImplementation(libs.androidx.compose.ui.test.junit4)
 
     // Instrumented tests (need a device or emulator running Android 10 or later).
     androidTestImplementation(platform(libs.androidx.compose.bom))
