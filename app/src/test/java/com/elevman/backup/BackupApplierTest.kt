@@ -19,6 +19,13 @@ import java.time.Clock
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -44,8 +51,9 @@ class BackupApplierTest {
     private lateinit var stagingDir: File
     private lateinit var writer: BackupWriter
 
-    private val copyCalls = mutableListOf<Pair<File, File>>()
-    private val writtenTables = mutableListOf<String>()
+    // Synchronized: the overlapping-apply test calls the hooks from several threads.
+    private val copyCalls = Collections.synchronizedList(mutableListOf<Pair<File, File>>())
+    private val writtenTables = Collections.synchronizedList(mutableListOf<String>())
 
     private val clock = Clock.fixed(Instant.ofEpochMilli(1_800_000_000_000L), ZoneOffset.UTC)
     private val staleMessage = "The local data changed since the preview. Preview the backup again."
@@ -449,6 +457,139 @@ class BackupApplierTest {
         assertDatabaseEquals(before)
         assertArrayEquals("the user's own PDF must survive a failed import", pdfOld, localPdf("manual-1").readBytes())
         assertEquals(listOf("manual-1.pdf"), manualsOnDisk())
+    }
+
+    @Test
+    fun overlappingAppliesNeverLoseAPdf() = runTest {
+        db.manualDao().upsertAll(listOf(manual("manual-1", "Old title", 10L)))
+        seedLocalPdf("manual-1", pdfOld)
+        val incoming = document(manuals = listOf(manual("manual-1", "New title", 20L)))
+        val valid = valid(incoming, mapOf("manual-1" to pdfOne))
+        val plan = planFor(valid)
+
+        // Each copy waits until the other apply is copying too, or one second has passed. Only an
+        // applier that lets two imports run at once ever gets both copies going together.
+        val bothCopying = CountDownLatch(2)
+        val applier = applier(
+            copyPdf = { from, to ->
+                bothCopying.countDown()
+                bothCopying.await(1, TimeUnit.SECONDS)
+                from.copyTo(to)
+            },
+        )
+        val results = listOf(
+            async(Dispatchers.Default) { runCatching { applier.apply(valid, plan) } },
+            async(Dispatchers.Default) { runCatching { applier.apply(valid, plan) } },
+        ).awaitAll()
+
+        // The applies take turns: the first one imports, the second finds the preview out of date.
+        assertEquals("exactly one apply succeeds", 1, results.count { it.isSuccess })
+        val failure = results.mapNotNull { it.exceptionOrNull() }.single()
+        assertTrue(failure.toString(), failure is IllegalStateException)
+        assertEquals(staleMessage, failure.message)
+        assertEquals(listOf(manual("manual-1", "New title", 20L)), db.manualDao().getAll())
+        assertArrayEquals(pdfOne, localPdf("manual-1").readBytes())
+        assertEquals("no stand-in file is left behind", listOf("manual-1.pdf"), manualsOnDisk())
+    }
+
+    @Test
+    fun previewIsStaleWhenAnOverriddenVersionChangedButCountsDidNot() = runTest {
+        db.manufacturerDao().upsertAll(listOf(ManufacturerEntity("mf-1", "Otis", 10L)))
+        val incoming = document(
+            manufacturers = listOf(ManufacturerEntity("mf-1", "Otis Elevator", 20L)),
+            manuals = listOf(manual("manual-1", "Service manual", 5L)),
+        )
+        val valid = valid(incoming, mapOf("manual-1" to pdfOne))
+        val plan = planFor(valid)
+        assertEquals(listOf(Overridden("ManufacturerEntity", "mf-1", "Otis", Side.INCOMING)), plan.overridden)
+
+        // The row the preview said would be replaced was renamed, but it is still older than the incoming one.
+        db.manufacturerDao().upsertAll(listOf(ManufacturerEntity("mf-1", "Otis renamed", 11L)))
+        val afterEdit = writer.snapshot()
+        assertEquals(MergePlanner.plan(afterEdit, incoming).let { it.added to it.updated }, plan.added to plan.updated)
+
+        try {
+            applier().apply(valid, plan)
+            fail("expected the stale preview to be rejected")
+        } catch (e: IllegalStateException) {
+            assertEquals(staleMessage, e.message)
+        }
+
+        assertDatabaseEquals(afterEdit)
+        assertEquals(emptyList<String>(), manualsOnDisk())
+    }
+
+    @Test
+    fun leftoverReplacedFileStopsTheImportBeforeAnyCopy() = runTest {
+        db.manualDao().upsertAll(listOf(manual("manual-1", "Old title", 10L)))
+        seedLocalPdf("manual-1", pdfOld)
+        val leftover = File(File(filesDir, "manuals"), "manual-1.pdf.replaced").also { it.writeBytes(pdfTwo) }
+        val before = writer.snapshot()
+        val incoming = document(
+            manuals = listOf(manual("manual-1", "New title", 20L), manual("manual-2", "Install manual", 5L)),
+        )
+        val valid = valid(incoming, mapOf("manual-1" to pdfOne, "manual-2" to pdfTwo))
+        val plan = planFor(valid)
+
+        try {
+            applier().apply(valid, plan)
+            fail("expected the interrupted import to be reported")
+        } catch (e: IllegalStateException) {
+            assertEquals("A previous import was interrupted. Restart the app and preview again.", e.message)
+        }
+
+        assertArrayEquals("the original is untouched", pdfOld, localPdf("manual-1").readBytes())
+        assertArrayEquals("the leftover is not overwritten", pdfTwo, leftover.readBytes())
+        assertFalse("no other manual was copied", localPdf("manual-2").exists())
+        assertEquals(emptyList<Pair<File, File>>(), copyCalls)
+        assertEquals(emptyList<String>(), writtenTables)
+        assertDatabaseEquals(before)
+    }
+
+    @Test
+    fun copyFailureOfAnUpdatedManualRestoresItsOriginal() = runTest {
+        db.manualDao().upsertAll(listOf(manual("manual-1", "Old title", 10L)))
+        seedLocalPdf("manual-1", pdfOld)
+        val before = writer.snapshot()
+        val incoming = document(manuals = listOf(manual("manual-1", "New title", 20L)))
+        val valid = valid(incoming, mapOf("manual-1" to pdfOne))
+        val plan = planFor(valid)
+
+        try {
+            applier(
+                copyPdf = { _, to ->
+                    to.writeBytes("half a PDF".toByteArray())
+                    throw IOException("no space left")
+                },
+            ).apply(valid, plan)
+            fail("expected the copy failure to propagate")
+        } catch (e: IOException) {
+            assertEquals("no space left", e.message)
+        }
+
+        assertArrayEquals(pdfOld, localPdf("manual-1").readBytes())
+        assertEquals("no .replaced file remains", listOf("manual-1.pdf"), manualsOnDisk())
+        assertEquals(emptyList<String>(), writtenTables)
+        assertDatabaseEquals(before)
+    }
+
+    @Test
+    fun cancellationDuringTheWriteStillCommitsAndKeepsTheFinishedPdfs() = runTest {
+        db.manualDao().upsertAll(listOf(manual("manual-1", "Old title", 10L)))
+        seedLocalPdf("manual-1", pdfOld)
+        val incoming = document(manuals = listOf(manual("manual-1", "New title", 20L)))
+        val valid = valid(incoming, mapOf("manual-1" to pdfOne))
+        val plan = planFor(valid)
+
+        lateinit var running: Deferred<Unit>
+        val applier = applier(onWrite = { if (it == "LogEntryEntity") running.cancel() })
+        running = async(Dispatchers.Default) { applier.apply(valid, plan) }
+        running.join()
+
+        assertTrue(running.isCancelled)
+        assertEquals("the write is not cancellable, so it committed", listOf(manual("manual-1", "New title", 20L)), db.manualDao().getAll())
+        assertArrayEquals(pdfOne, localPdf("manual-1").readBytes())
+        assertEquals("the committed import leaves no stand-in file", listOf("manual-1.pdf"), manualsOnDisk())
     }
 
     @Test

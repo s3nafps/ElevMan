@@ -292,4 +292,16 @@ class MergePlannerTest {
         assertEquals(winners.updated, plan.updated)
         assertEquals(winners.overridden, plan.overridden)
     }
+
+    @Test
+    fun tableNamesAreTheEntityClassNames() {
+        assertEquals(ManufacturerEntity::class.simpleName, MergeTable.MANUFACTURERS)
+        assertEquals(ElevatorModelEntity::class.simpleName, MergeTable.MODELS)
+        assertEquals(ManualEntity::class.simpleName, MergeTable.MANUALS)
+        assertEquals(ErrorCodeEntity::class.simpleName, MergeTable.ERROR_CODES)
+        assertEquals(MaintenanceTaskEntity::class.simpleName, MergeTable.MAINTENANCE_TASKS)
+        assertEquals(ElevatorEntity::class.simpleName, MergeTable.ELEVATORS)
+        assertEquals(ElevatorTaskEntity::class.simpleName, MergeTable.ELEVATOR_TASKS)
+        assertEquals(LogEntryEntity::class.simpleName, MergeTable.LOG_ENTRIES)
+    }
 }
