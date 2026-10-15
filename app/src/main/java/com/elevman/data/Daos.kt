@@ -52,6 +52,9 @@ interface ErrorCodeDao {
 
     @Query("SELECT * FROM ErrorCodeEntity WHERE manualId = :manualId AND status = :status")
     suspend fun findByManualAndStatus(manualId: String, status: ReviewStatus): List<ErrorCodeEntity>
+
+    @Query("SELECT * FROM ErrorCodeEntity WHERE normalizedCode = :key AND status != :excluded")
+    suspend fun findByKeyExcludingStatus(key: String, excluded: ReviewStatus): List<ErrorCodeEntity>
 }
 
 @Dao
