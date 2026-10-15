@@ -4,6 +4,7 @@
     <!-- No network permission is declared on purpose: ElevMan works fully offline and nothing leaves the phone. -->
 
     <application
+        android:name=".ElevManApp"
         android:allowBackup="false"
         android:label="@string/app_name"
         android:supportsRtl="true"
