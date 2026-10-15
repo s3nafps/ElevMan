@@ -97,6 +97,12 @@ interface ElevatorTaskDao {
 
     @Query("SELECT * FROM ElevatorTaskEntity WHERE elevatorId = :elevatorId")
     suspend fun findByElevatorId(elevatorId: String): List<ElevatorTaskEntity>
+
+    @Query(
+        "SELECT * FROM ElevatorTaskEntity " +
+            "WHERE elevatorId = :elevatorId AND maintenanceTaskId = :maintenanceTaskId ORDER BY id LIMIT 1",
+    )
+    suspend fun findByElevatorAndTask(elevatorId: String, maintenanceTaskId: String): ElevatorTaskEntity?
 }
 
 @Dao

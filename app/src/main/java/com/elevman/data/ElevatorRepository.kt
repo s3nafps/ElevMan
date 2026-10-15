@@ -58,24 +58,30 @@ class ElevatorRepository(
     }
 
     /**
-     * Assigns a maintenance task to an elevator, starting today, and returns the id of the new
+     * Assigns a maintenance task to an elevator, starting today, and returns the id of the
      * [ElevatorTaskEntity]. The task is first due one interval after today.
+     *
+     * Idempotent: when the elevator already has this task, nothing is inserted and the id of the
+     * existing row is returned, with its original start date.
      */
-    suspend fun assignTask(elevatorId: String, maintenanceTaskId: String): String {
-        val id = newId()
-        elevatorTasks.upsertAll(
-            listOf(
-                ElevatorTaskEntity(
-                    id = id,
-                    elevatorId = elevatorId,
-                    maintenanceTaskId = maintenanceTaskId,
-                    startDate = today(),
-                    updatedAt = clock.millis(),
-                ),
-            ),
-        )
-        return id
-    }
+    suspend fun assignTask(elevatorId: String, maintenanceTaskId: String): String =
+        db.withTransaction {
+            elevatorTasks.findByElevatorAndTask(elevatorId, maintenanceTaskId)?.id ?: run {
+                val id = newId()
+                elevatorTasks.upsertAll(
+                    listOf(
+                        ElevatorTaskEntity(
+                            id = id,
+                            elevatorId = elevatorId,
+                            maintenanceTaskId = maintenanceTaskId,
+                            startDate = today(),
+                            updatedAt = clock.millis(),
+                        ),
+                    ),
+                )
+                id
+            }
+        }
 
     /**
      * Records that the elevator task [elevatorTaskId] was done on [date]. Backdated dates are fine.

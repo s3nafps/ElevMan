@@ -180,6 +180,41 @@ class ElevatorRepositoryTest {
     }
 
     @Test
+    fun assigningTheSameTaskTwiceReturnsTheExistingIdAndInsertsOneRow() = runTest {
+        val firstDay = LocalDate.of(2026, 8, 1)
+        val laterDay = LocalDate.of(2026, 9, 10)
+        seedElevator("e1")
+        seedElevator("e2")
+        seedTask("t-monthly", "Check brakes", months = 1)
+        seedTask("t-quarterly", "Clean pit", months = 3)
+
+        val first = repoOn(firstDay).assignTask("e1", "t-monthly")
+        val second = repoOn(laterDay).assignTask("e1", "t-monthly")
+
+        val stored = db.elevatorTaskDao().getAll()
+        assertEquals(1, stored.size)
+        assertEquals(first, second)
+        assertEquals(firstDay, stored.single().startDate)
+        assertEquals(millisOn(firstDay), stored.single().updatedAt)
+        assertEquals(
+            listOf(DueItem(first, "Check brakes", LocalDate.of(2026, 9, 1), overdue = true)),
+            repoOn(laterDay).dueItems("e1"),
+        )
+
+        // A different task on the same elevator, and the same task on another elevator, are new rows.
+        val otherTask = repoOn(laterDay).assignTask("e1", "t-quarterly")
+        val otherElevator = repoOn(laterDay).assignTask("e2", "t-monthly")
+
+        assertEquals(3, setOf(first, otherTask, otherElevator).size)
+        val all = db.elevatorTaskDao().getAll().associateBy { it.id }
+        assertEquals(3, all.size)
+        assertEquals(laterDay, all.getValue(otherTask).startDate)
+        assertEquals(laterDay, all.getValue(otherElevator).startDate)
+        assertEquals("t-quarterly", all.getValue(otherTask).maintenanceTaskId)
+        assertEquals("e2", all.getValue(otherElevator).elevatorId)
+    }
+
+    @Test
     fun markDoneMovesDueForward() = runTest {
         val repo = repoOn(today)
         seedElevator("e1")
