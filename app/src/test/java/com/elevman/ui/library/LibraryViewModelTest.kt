@@ -13,8 +13,10 @@ import com.elevman.data.ManufacturerEntity
 import com.elevman.data.ReviewRepository
 import com.elevman.data.ReviewStatus
 import com.elevman.domain.normalizeCode
+import com.elevman.ui.HoldNextIo
 import java.time.Clock
 import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -51,7 +53,8 @@ class LibraryViewModelTest {
         db.close()
     }
 
-    private fun viewModel() = LibraryViewModel(db, ReviewRepository(db, Clock.systemUTC()), scope)
+    private fun viewModel(io: CoroutineDispatcher = Dispatchers.IO) =
+        LibraryViewModel(db, ReviewRepository(db, Clock.systemUTC()), scope, io)
 
     private fun LibraryViewModel.settled(done: (LibraryUiState) -> Boolean = { true }): LibraryUiState =
         runBlocking { withTimeout(10.seconds) { state.first { it.loaded && done(it) } } }
@@ -223,5 +226,166 @@ class LibraryViewModelTest {
         val state = library.settled { s -> s.manufacturers.flatMap { it.models }.first { it.name == "Gen2" }.toReview == 1 }
 
         assertEquals(1, state.manufacturers.flatMap { it.models }.first { it.name == "Gen2" }.toReview)
+    }
+
+    // ---- Entering codes and tasks by hand -----------------------------------------------------
+
+    private fun LibraryViewModel.openModelPage(modelId: String = "m-gen2") {
+        openModel(modelId)
+        settled { it.detailLoaded && it.detail != null }
+    }
+
+    private fun savedCodes() = runBlocking { db.errorCodeDao().getAll() }
+
+    private fun savedTasks() = runBlocking { db.maintenanceTaskDao().getAll() }
+
+    @Test
+    fun aSavedCodeIsListedOnTheModelPageAfterTheFormCloses() {
+        seed()
+        val library = viewModel()
+        library.openModelPage()
+
+        library.openCodeEntry("man-2")
+        assertEquals(ManualEntry.Code("man-2", "Installation manual"), library.state.value.entry)
+        library.saveCode(NewCode("e-22", "Door lock fault", "Replace the lock", 12))
+        val state = library.settled { s -> s.entry == null && s.detail?.codes?.any { it.code == "e-22" } == true }
+
+        val detail = state.detail!!
+        val saved = detail.codes.single { it.code == "e-22" }
+        assertEquals(ReviewStatus.CONFIRMED, saved.status)
+        assertEquals("E22", saved.normalizedCode)
+        assertEquals("man-2", saved.manualId)
+        assertEquals("m-gen2", saved.modelId)
+        assertEquals("Door lock fault", saved.meaning)
+        assertEquals("Replace the lock", saved.causeAndFix)
+        assertEquals(12, saved.pageNumber)
+        // The existing confirmed code is still there, the list stays sorted, and nothing is left over.
+        assertEquals(listOf("E-21", "e-22"), detail.codes.map { it.code })
+        assertFalse(state.entrySaving)
+        assertNull(state.entryError)
+        // A typed code is not a suggestion: the number to review did not change.
+        assertEquals(
+            listOf(Triple("Installation manual", 80, 1), Triple("Service manual", 120, 2)),
+            detail.manuals.map { Triple(it.title, it.pageCount, it.toReview) },
+        )
+    }
+
+    @Test
+    fun aSavedTaskIsListedOnTheModelPageAfterTheFormCloses() {
+        seed()
+        val library = viewModel()
+        library.openModelPage()
+
+        library.openTaskEntry("man-1")
+        assertEquals(ManualEntry.Task("man-1", "Service manual"), library.state.value.entry)
+        library.saveTask(NewTask("Inspect door rollers", 12, 0))
+        val state = library.settled { s -> s.entry == null && s.detail?.tasks?.any { it.name == "Inspect door rollers" } == true }
+
+        val detail = state.detail!!
+        val saved = detail.tasks.single { it.name == "Inspect door rollers" }
+        assertEquals(ReviewStatus.CONFIRMED, saved.status)
+        assertEquals(12, saved.intervalMonths)
+        assertEquals(0, saved.pageNumber)
+        assertEquals("man-1", saved.manualId)
+        assertEquals("m-gen2", saved.modelId)
+        assertEquals(listOf("Check brake", "Inspect door rollers"), detail.tasks.map { it.name })
+    }
+
+    @Test
+    fun aFailedSaveKeepsTheFormOpenWithItsMessageAndCanBeTriedAgain() {
+        seed()
+        val library = viewModel()
+        library.openModelPage()
+        library.openCodeEntry("man-1")
+        // The manual goes away while the form is open (a backup import can do that).
+        db.openHelper.writableDatabase.execSQL("DELETE FROM ManualEntity WHERE id = 'man-1'")
+        val before = savedCodes().size
+
+        library.saveCode(NewCode("e-22", "Door lock fault", "", 0))
+        val failed = library.settled { it.entryError != null }
+
+        assertEquals(ENTRY_FAILED_MESSAGE, failed.entryError)
+        assertEquals(ManualEntry.Code("man-1", "Service manual"), failed.entry)
+        assertFalse(failed.entrySaving)
+        assertEquals(before, savedCodes().size)
+
+        // The manual is back: the same form saves, and the message goes.
+        runBlocking { db.manualDao().upsertAll(listOf(ManualEntity("man-1", "m-gen2", "Service manual", "h1", 120, 1L))) }
+        library.saveCode(NewCode("e-22", "Door lock fault", "", 0))
+        val saved = library.settled { it.entry == null && it.detail?.codes?.any { c -> c.code == "e-22" } == true }
+
+        assertNull(saved.entryError)
+        assertEquals(before + 1, savedCodes().size)
+    }
+
+    @Test
+    fun cancellingTheFormClosesItAndClearsItsMessage() {
+        seed()
+        val library = viewModel()
+        library.openModelPage()
+        library.openTaskEntry("man-1")
+        db.openHelper.writableDatabase.execSQL("DELETE FROM ManualEntity WHERE id = 'man-1'")
+        library.saveTask(NewTask("Inspect door rollers", 12, 0))
+        library.settled { it.entryError != null }
+
+        library.dismissEntry()
+
+        assertNull(library.state.value.entry)
+        assertNull(library.state.value.entryError)
+        assertEquals(1, savedTasks().count { it.manualId == "man-1" })
+    }
+
+    @Test
+    fun theWriteRunsOnTheIoDispatcherAndASecondSaveWhileItRunsIsIgnored() {
+        seed()
+        val io = HoldNextIo()
+        val library = viewModel(io)
+        library.openModelPage()
+        library.openCodeEntry("man-1")
+        val before = savedCodes().size
+
+        io.holdNext()
+        library.saveCode(NewCode("e-22", "Door lock fault", "", 0))
+        io.awaitHeld()
+        // Nothing was written on the calling thread: the write waits on the io dispatcher.
+        assertEquals(before, savedCodes().size)
+        assertTrue(library.state.value.entrySaving)
+
+        // A second tap on Save meanwhile does not write a second row.
+        library.saveCode(NewCode("e-22", "Door lock fault", "", 0))
+        io.releaseHeld()
+        library.settled { it.entry == null && !it.entrySaving }
+
+        assertEquals(before + 1, savedCodes().size)
+        assertEquals(1, savedCodes().count { it.code == "e-22" })
+    }
+
+    @Test
+    fun aFormCannotBeOpenedForAManualThatIsNotOnThePage() {
+        seed()
+        val library = viewModel()
+        library.openModelPage()
+
+        library.openCodeEntry("man-3")
+        assertNull(library.state.value.entry)
+        library.openTaskEntry("nope")
+        assertNull(library.state.value.entry)
+        // Saving with no form open writes nothing.
+        library.saveCode(NewCode("e-22", "Door lock fault", "", 0))
+        assertFalse(library.state.value.entrySaving)
+        assertEquals(5, savedCodes().size)
+    }
+
+    @Test
+    fun leavingTheModelPageClosesTheForm() {
+        seed()
+        val library = viewModel()
+        library.openModelPage()
+        library.openCodeEntry("man-1")
+
+        library.back()
+
+        assertNull(library.state.value.entry)
+        assertNull(library.state.value.entryError)
     }
 }

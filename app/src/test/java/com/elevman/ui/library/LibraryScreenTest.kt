@@ -4,6 +4,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -12,6 +13,7 @@ import com.elevman.data.MaintenanceTaskEntity
 import com.elevman.data.ReviewStatus
 import com.elevman.ui.theme.ElevManTheme
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -171,6 +173,8 @@ class LibraryScreenTest {
     private class Taps {
         val viewed = mutableListOf<Pair<String, Int>>()
         val reviewed = mutableListOf<String>()
+        val codesAdded = mutableListOf<String>()
+        val tasksAdded = mutableListOf<String>()
     }
 
     private fun showModel(detail: ModelDetail?, loaded: Boolean = true, taps: Taps = Taps()): Taps {
@@ -181,6 +185,8 @@ class LibraryScreenTest {
                     loaded = loaded,
                     onOpenManual = { id, page -> taps.viewed += id to page },
                     onReview = { taps.reviewed += it },
+                    onAddCode = { taps.codesAdded += it },
+                    onAddTask = { taps.tasksAdded += it },
                 )
             }
         }
@@ -243,5 +249,54 @@ class LibraryScreenTest {
         showModel(null, loaded = true)
 
         rule.onNodeWithText(MODEL_GONE_MESSAGE).assertIsDisplayed()
+    }
+
+    // ---- Entering codes and tasks by hand ---------------------------------------------------
+
+    @Test
+    fun everyManualHasAnAddCodeAndAnAddTaskButton() {
+        showModel(detail)
+
+        rule.onAllNodesWithText("Add code").assertCountEquals(2)
+        rule.onAllNodesWithText("Add task").assertCountEquals(2)
+    }
+
+    @Test
+    fun addCodeAndAddTaskReportTheManualTheyBelongTo() {
+        val taps = showModel(detail)
+
+        // Both manuals have the buttons, and the text alone cannot tell them apart: the spoken name can.
+        rule.onNodeWithContentDescription("Add error code to Installation manual").performClick()
+        rule.onNodeWithContentDescription("Add maintenance task to Service manual").performClick()
+
+        assertEquals(listOf("man-2"), taps.codesAdded)
+        assertEquals(listOf("man-1"), taps.tasksAdded)
+        assertTrue(taps.reviewed.isEmpty())
+        assertTrue(taps.viewed.isEmpty())
+    }
+
+    @Test
+    fun theAddButtonsAreThereForAManualWithNothingToReviewToo() {
+        val taps = showModel(detail.copy(manuals = listOf(ManualSummary("man-9", "Brochure", 0, toReview = 0))))
+
+        rule.onNodeWithText("Add code").performClick()
+        rule.onNodeWithText("Add task").performClick()
+
+        assertEquals(listOf("man-9"), taps.codesAdded)
+        assertEquals(listOf("man-9"), taps.tasksAdded)
+        rule.onNodeWithText("Review").assertDoesNotExist()
+    }
+
+    @Test
+    fun aCodeEnteredWithoutAPageShowsNoPageAndOpensTheManualAtPageOne() {
+        val noPage = ErrorCodeEntity("c2", "m-gen2", "man-2", "E-30", "E30", "Overspeed", "", 0, ReviewStatus.CONFIRMED, 1L)
+        val taps = showModel(detail.copy(codes = listOf(noPage), tasks = emptyList()))
+
+        rule.onNodeWithText("Overspeed").assertIsDisplayed()
+        // No "Page 0" and no page at all on that row.
+        rule.onAllNodesWithText("Page", substring = true).assertCountEquals(0)
+        rule.onNodeWithText("Overspeed").performClick()
+
+        assertEquals(listOf("man-2" to 1), taps.viewed)
     }
 }

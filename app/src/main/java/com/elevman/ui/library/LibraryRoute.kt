@@ -90,15 +90,13 @@ fun LibraryRoute(
             onImport = { picker.launch(arrayOf("application/pdf")) },
             modifier = modifier,
         )
-        is LibraryPage.Model -> Column(modifier = modifier.fillMaxSize()) {
-            ScreenTopBar(title = state.detail?.takeIf { it.id == page.modelId }?.name ?: "Model", onBack = library::back)
-            ModelScreen(
-                detail = state.detail?.takeIf { it.id == page.modelId },
-                loaded = state.detailLoaded,
-                onOpenManual = onOpenViewer,
-                onReview = library::openReview,
-            )
-        }
+        is LibraryPage.Model -> ModelPage(
+            modelId = page.modelId,
+            state = state,
+            library = library,
+            onOpenManual = onOpenViewer,
+            modifier = modifier,
+        )
         is LibraryPage.Review -> ReviewRoute(
             manualId = page.manualId,
             container = container,
@@ -127,4 +125,38 @@ fun LibraryRoute(
             )
         }
     }
+}
+
+/**
+ * The page of model [modelId]: its top bar, the model screen, and the entry form when one is open.
+ * A saved entry closes the form and [library] reads the page again, so the new code or task is
+ * listed. [onOpenManual] opens a manual in the PDF viewer at a page.
+ */
+@Composable
+internal fun ModelPage(
+    modelId: String,
+    state: LibraryUiState,
+    library: LibraryViewModel,
+    onOpenManual: (manualId: String, page: Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val detail = state.detail?.takeIf { it.id == modelId }
+    Column(modifier = modifier.fillMaxSize()) {
+        ScreenTopBar(title = detail?.name ?: "Model", onBack = library::back)
+        ModelScreen(
+            detail = detail,
+            loaded = state.detailLoaded,
+            onOpenManual = onOpenManual,
+            onReview = library::openReview,
+            onAddCode = library::openCodeEntry,
+            onAddTask = library::openTaskEntry,
+        )
+    }
+    ManualEntryDialogs(
+        entry = state.entry,
+        error = state.entryError,
+        onSaveCode = library::saveCode,
+        onSaveTask = library::saveTask,
+        onDismiss = library::dismissEntry,
+    )
 }

@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import java.util.UUID
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -372,5 +373,150 @@ class ReviewRepositoryTest {
         assertEquals(2, repo.suggestedCount("B"))
         assertEquals(0, repo.suggestedCount("none"))
         assertTrue(repo.suggestedFor("none").isEmpty())
+    }
+
+    // ---- Entries typed by hand --------------------------------------------------------------
+
+    private suspend fun seedManual(id: String = "A", modelId: String = "model-1") {
+        db.manualDao().upsertAll(listOf(ManualEntity(id, modelId, "Service manual", "hash-$id", 40, seededAt)))
+    }
+
+    @Test
+    fun addManualErrorCodeSavesAConfirmedCodeWithItsNormalizedKey() = runTest {
+        seedManual("A", modelId = "model-7")
+
+        val id = repo.addManualErrorCode("A", code = "e-21", meaning = "Door zone fault", causeAndFix = "Clean the sensor", pageNumber = 33)
+
+        val row = db.errorCodeDao().findById(id)!!
+        assertEquals("e-21", row.code)
+        assertEquals("E21", row.normalizedCode)
+        assertEquals(ReviewStatus.CONFIRMED, row.status)
+        assertEquals("Door zone fault", row.meaning)
+        assertEquals("Clean the sensor", row.causeAndFix)
+        assertEquals(33, row.pageNumber)
+        // The model comes from the manual, not from the caller.
+        assertEquals("A", row.manualId)
+        assertEquals("model-7", row.modelId)
+        assertEquals(now, row.updatedAt)
+        // A fresh UUID.
+        assertEquals(id, UUID.fromString(id).toString())
+        assertEquals(1, db.errorCodeDao().getAll().size)
+    }
+
+    @Test
+    fun aHandEnteredCodeIsFoundBySearchAndIsNotWaitingForReview() = runTest {
+        seedManual("A")
+
+        repo.addManualErrorCode("A", code = "E-21", meaning = "Door zone fault")
+
+        // Typed codes are confirmed, so the review has nothing to ask about.
+        assertEquals(0, repo.suggestedCount("A"))
+        assertTrue(repo.suggestedFor("A").isEmpty())
+        val hits = CodeSearch(db).search("e 21")
+        assertEquals(listOf(ReviewStatus.CONFIRMED), hits.map { it.status })
+        assertEquals(listOf("E-21"), hits.map { it.code })
+    }
+
+    @Test
+    fun addManualErrorCodeWithoutAPageOrACauseSavesZeroAndNothing() = runTest {
+        seedManual("A")
+
+        val id = repo.addManualErrorCode("A", code = "E21", meaning = "Door zone fault")
+
+        val row = db.errorCodeDao().findById(id)!!
+        assertEquals(0, row.pageNumber)
+        assertEquals("", row.causeAndFix)
+    }
+
+    @Test
+    fun addManualErrorCodeTrimsWhatWasTyped() = runTest {
+        seedManual("A")
+
+        val id = repo.addManualErrorCode("A", code = "  E21 ", meaning = " Door zone fault ", causeAndFix = " Clean it ")
+
+        val row = db.errorCodeDao().findById(id)!!
+        assertEquals("E21", row.code)
+        assertEquals("Door zone fault", row.meaning)
+        assertEquals("Clean it", row.causeAndFix)
+    }
+
+    @Test
+    fun everyHandEnteredCodeGetsItsOwnId() = runTest {
+        seedManual("A")
+
+        val first = repo.addManualErrorCode("A", code = "E21", meaning = "Door zone fault")
+        val second = repo.addManualErrorCode("A", code = "E21", meaning = "Door zone fault")
+
+        assertTrue(first != second)
+        assertEquals(2, db.errorCodeDao().getAll().size)
+    }
+
+    @Test
+    fun addManualErrorCodeRejectsAnUnknownManualAndSavesNothing() = runTest {
+        seedManual("A")
+
+        assertThrowsIllegalArgument { repo.addManualErrorCode("missing", code = "E21", meaning = "Door zone fault") }
+
+        assertEquals(emptyList<ErrorCodeEntity>(), db.errorCodeDao().getAll())
+    }
+
+    @Test
+    fun addManualErrorCodeRejectsABlankCodeAndABlankMeaning() = runTest {
+        seedManual("A")
+
+        assertThrowsIllegalArgument { repo.addManualErrorCode("A", code = "  ", meaning = "Door zone fault") }
+        // Nothing a search could ever match: no letter and no digit.
+        assertThrowsIllegalArgument { repo.addManualErrorCode("A", code = "--", meaning = "Door zone fault") }
+        assertThrowsIllegalArgument { repo.addManualErrorCode("A", code = "E21", meaning = " ") }
+
+        assertEquals(emptyList<ErrorCodeEntity>(), db.errorCodeDao().getAll())
+    }
+
+    @Test
+    fun addManualMaintenanceTaskSavesAConfirmedTask() = runTest {
+        seedManual("A", modelId = "model-7")
+
+        val id = repo.addManualMaintenanceTask("A", name = " Check brake ", intervalMonths = 6, pageNumber = 9)
+
+        val row = db.maintenanceTaskDao().findById(id)!!
+        assertEquals("Check brake", row.name)
+        assertEquals(6, row.intervalMonths)
+        assertEquals(9, row.pageNumber)
+        assertEquals(ReviewStatus.CONFIRMED, row.status)
+        assertEquals("A", row.manualId)
+        assertEquals("model-7", row.modelId)
+        assertEquals(now, row.updatedAt)
+        assertEquals(id, UUID.fromString(id).toString())
+        assertEquals(0, repo.suggestedCount("A"))
+    }
+
+    @Test
+    fun addManualMaintenanceTaskWithoutAPageSavesZero() = runTest {
+        seedManual("A")
+
+        val id = repo.addManualMaintenanceTask("A", name = "Check brake", intervalMonths = 1)
+
+        assertEquals(0, db.maintenanceTaskDao().findById(id)!!.pageNumber)
+        assertEquals(1, db.maintenanceTaskDao().findById(id)!!.intervalMonths)
+    }
+
+    @Test
+    fun addManualMaintenanceTaskRejectsAnUnknownManual() = runTest {
+        seedManual("A")
+
+        assertThrowsIllegalArgument { repo.addManualMaintenanceTask("missing", name = "Check brake", intervalMonths = 6) }
+
+        assertEquals(emptyList<MaintenanceTaskEntity>(), db.maintenanceTaskDao().getAll())
+    }
+
+    @Test
+    fun addManualMaintenanceTaskRejectsAnIntervalBelowOneAndABlankName() = runTest {
+        seedManual("A")
+
+        assertThrowsIllegalArgument { repo.addManualMaintenanceTask("A", name = "Check brake", intervalMonths = 0) }
+        assertThrowsIllegalArgument { repo.addManualMaintenanceTask("A", name = "Check brake", intervalMonths = -3) }
+        assertThrowsIllegalArgument { repo.addManualMaintenanceTask("A", name = "  ", intervalMonths = 6) }
+
+        assertEquals(emptyList<MaintenanceTaskEntity>(), db.maintenanceTaskDao().getAll())
     }
 }

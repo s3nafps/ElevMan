@@ -49,6 +49,13 @@ internal const val INTERVAL_TOO_SMALL_MESSAGE = "Interval must be at least 1 mon
 internal const val CODE_REQUIRED_MESSAGE = "Enter the code."
 internal const val NAME_REQUIRED_MESSAGE = "Enter a name."
 
+/**
+ * The interval typed in [text] as a number of months, or null when it is not a whole number of at
+ * least 1 month ([INTERVAL_TOO_SMALL_MESSAGE] is for the person then). The one check for every form
+ * that takes an interval, so the edit dialog and the manual entry form cannot disagree.
+ */
+internal fun validInterval(text: String): Int? = text.trim().toIntOrNull()?.takeIf { it >= 1 }
+
 // Well over the 48dp a finger needs.
 private val ButtonHeight = 48.dp
 
@@ -129,11 +136,11 @@ private fun EditTaskDialog(target: EditTarget.Task, onSave: (EditTarget) -> Unit
     DialogFrame(
         title = "Edit maintenance task",
         onSave = {
-            val months = interval.trim().toIntOrNull()
+            val months = validInterval(interval)
             nameMissing = name.isBlank()
             // Not a whole number, or below 1: turned back here, before the repository is asked.
-            intervalRejected = months == null || months < 1
-            if (!nameMissing && !intervalRejected && months != null) {
+            intervalRejected = months == null
+            if (!nameMissing && months != null) {
                 onSave(target.copy(name = name.trim(), intervalMonths = months))
             }
         },
@@ -168,31 +175,39 @@ private fun EditTaskDialog(target: EditTarget.Task, onSave: (EditTarget) -> Unit
     }
 }
 
-/** The dialog's title, a scrolling body (the keyboard takes much of a small screen), and its two buttons. */
+/**
+ * The dialog's title, a scrolling body (the keyboard takes much of a small screen), and its two
+ * buttons. Shared with the manual entry forms.
+ *
+ * [error] is shown under the fields, in the dialog where the person is looking. By default it is the
+ * last line of the scrolling body, as the review's edit dialogs have it. With [errorPinned] it stays
+ * below the scrolling body instead, so a form too tall for a small screen with the keyboard open
+ * does not hide it below the fold.
+ */
 @Composable
-private fun DialogFrame(
+internal fun DialogFrame(
     title: String,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
     error: String?,
+    errorPinned: Boolean = false,
     fields: @Composable () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                fields()
-                // Inside the dialog, where the person is looking: the screen behind it is dimmed.
-                if (error != null) {
-                    Text(
-                        text = error,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .padding(top = 8.dp)
-                            .semantics { liveRegion = LiveRegionMode.Polite },
-                    )
+            if (errorPinned) {
+                Column {
+                    Column(modifier = Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
+                        fields()
+                    }
+                    ErrorLine(error)
+                }
+            } else {
+                Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    fields()
+                    ErrorLine(error)
                 }
             }
         },
@@ -203,4 +218,19 @@ private fun DialogFrame(
             TextButton(onClick = onDismiss, modifier = Modifier.heightIn(min = ButtonHeight)) { Text("Cancel") }
         },
     )
+}
+
+/** Inside the dialog, where the person is looking: the screen behind it is dimmed. */
+@Composable
+private fun ErrorLine(error: String?) {
+    if (error != null) {
+        Text(
+            text = error,
+            color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodyMedium,
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .semantics { liveRegion = LiveRegionMode.Polite },
+        )
+    }
 }

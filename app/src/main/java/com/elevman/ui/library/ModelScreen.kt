@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -33,6 +34,9 @@ internal const val MODEL_GONE_MESSAGE = "This model is no longer in the library.
  *
  * [detail] is null while it is being read ([loaded] false) or when the model is gone.
  * [onOpenManual] opens a manual in the viewer at a page, [onReview] opens the review of a manual.
+ * [onAddCode] and [onAddTask] open the form to type in an error code or a maintenance task of a
+ * manual by hand; every manual has both, whatever its PDF holds. A code or task without a page
+ * (page 0) shows none, and its code opens the manual at page 1.
  */
 @Composable
 fun ModelScreen(
@@ -40,6 +44,8 @@ fun ModelScreen(
     loaded: Boolean,
     onOpenManual: (manualId: String, page: Int) -> Unit,
     onReview: (manualId: String) -> Unit,
+    onAddCode: (manualId: String) -> Unit,
+    onAddTask: (manualId: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (detail == null) {
@@ -61,7 +67,13 @@ fun ModelScreen(
         item { SectionHeading("Manuals") }
         if (detail.manuals.isEmpty()) item { Empty("No manuals yet.") }
         items(detail.manuals, key = { "manual/${it.id}" }) { manual ->
-            ManualRow(manual, onOpen = { onOpenManual(manual.id, 1) }, onReview = { onReview(manual.id) })
+            ManualRow(
+                manual = manual,
+                onOpen = { onOpenManual(manual.id, 1) },
+                onReview = { onReview(manual.id) },
+                onAddCode = { onAddCode(manual.id) },
+                onAddTask = { onAddTask(manual.id) },
+            )
             HorizontalDivider()
         }
 
@@ -73,18 +85,23 @@ fun ModelScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 64.dp)
-                    .clickable(onClickLabel = "Open the manual at page ${code.pageNumber}") {
-                        onOpenManual(code.manualId, code.pageNumber)
+                    .clickable(
+                        onClickLabel = if (code.pageNumber > 0) "Open the manual at page ${code.pageNumber}" else "Open the manual",
+                    ) {
+                        // 0 is "no page" (a code typed in without one): the viewer starts at the first.
+                        onOpenManual(code.manualId, code.pageNumber.coerceAtLeast(1))
                     }
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
                     Text(code.code, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    Text(
-                        "Page ${code.pageNumber}",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (code.pageNumber > 0) {
+                        Text(
+                            "Page ${code.pageNumber}",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 Text(code.meaning, style = MaterialTheme.typography.bodyLarge)
                 if (code.causeAndFix.isNotBlank()) Text(code.causeAndFix, style = MaterialTheme.typography.bodyMedium)
@@ -138,37 +155,64 @@ private fun Empty(text: String) {
 }
 
 @Composable
-private fun ManualRow(manual: ManualSummary, onOpen: () -> Unit, onReview: () -> Unit) {
-    Row(
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+private fun ManualRow(
+    manual: ManualSummary,
+    onOpen: () -> Unit,
+    onReview: () -> Unit,
+    onAddCode: () -> Unit,
+    onAddTask: () -> Unit,
+) {
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 64.dp)
             .padding(horizontal = 16.dp, vertical = 8.dp),
     ) {
-        Column(
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+        Row(
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
-                .weight(1f)
-                .clickable(onClickLabel = "Open ${manual.title}", onClick = onOpen)
-                .heightIn(min = 48.dp),
+                .fillMaxWidth()
+                .heightIn(min = 64.dp),
         ) {
-            Text(manual.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-            Text(
-                text = if (manual.pageCount > 0) "${manual.pageCount} pages" else "Page count unknown",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (manual.toReview > 0) Text(toReviewLabel(manual.toReview), style = MaterialTheme.typography.labelLarge)
-        }
-        if (manual.toReview > 0) {
-            OutlinedButton(
-                onClick = onReview,
+            Column(
+                verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier
-                    .padding(start = 8.dp)
+                    .weight(1f)
+                    .clickable(onClickLabel = "Open ${manual.title}", onClick = onOpen)
                     .heightIn(min = 48.dp),
-            ) { Text("Review") }
+            ) {
+                Text(manual.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    text = if (manual.pageCount > 0) "${manual.pageCount} pages" else "Page count unknown",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (manual.toReview > 0) Text(toReviewLabel(manual.toReview), style = MaterialTheme.typography.labelLarge)
+            }
+            if (manual.toReview > 0) {
+                OutlinedButton(
+                    onClick = onReview,
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .heightIn(min = 48.dp),
+                ) { Text("Review") }
+            }
+        }
+        // Typing a code or a task in is always possible: a scanned PDF has no text to suggest from.
+        // Every manual has the same two labels, so each button also names its manual for a screen reader.
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 4.dp)) {
+            OutlinedButton(
+                onClick = onAddCode,
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = "Add error code to ${manual.title}" },
+            ) { Text("Add code") }
+            OutlinedButton(
+                onClick = onAddTask,
+                modifier = Modifier
+                    .heightIn(min = 48.dp)
+                    .semantics { contentDescription = "Add maintenance task to ${manual.title}" },
+            ) { Text("Add task") }
         }
     }
 }

@@ -3,6 +3,7 @@ package com.elevman.data
 import androidx.room.withTransaction
 import com.elevman.domain.normalizeCode
 import java.time.Clock
+import java.util.UUID
 
 enum class ItemKind { ERROR_CODE, MAINTENANCE_TASK }
 
@@ -91,7 +92,7 @@ class ReviewRepository(
      * @throws IllegalArgumentException when [intervalMonths] is below 1.
      */
     suspend fun editMaintenanceTask(id: String, name: String, intervalMonths: Int) {
-        require(intervalMonths >= 1) { "intervalMonths must be at least 1, was $intervalMonths" }
+        requireValidInterval(intervalMonths)
         val now = clock.millis()
         db.withTransaction {
             tasks.findById(id)?.let {
@@ -116,4 +117,83 @@ class ReviewRepository(
             suggestedCodes.size + suggestedTasks.size
         }
     }
+
+    /**
+     * Saves an error code a person typed in for [manualId], already [ReviewStatus.CONFIRMED]: nobody
+     * needs to review what they entered themselves. The model is the manual's. [pageNumber] 0 means
+     * the code has no page. `normalizedCode` is computed from [code], so a search finds it however
+     * it is spelled. The text fields are trimmed.
+     *
+     * @return the id of the new row.
+     * @throws IllegalArgumentException when [code] has no letter or digit in it (a search could never
+     *   find it), when [meaning] is blank, when [pageNumber] is negative, or when no manual has this id.
+     */
+    suspend fun addManualErrorCode(
+        manualId: String,
+        code: String,
+        meaning: String,
+        causeAndFix: String = "",
+        pageNumber: Int = 0,
+    ): String {
+        val normalized = normalizeCode(code)
+        require(normalized.isNotEmpty()) { "code needs at least one letter or digit" }
+        require(meaning.isNotBlank()) { "meaning must not be blank" }
+        requireValidPage(pageNumber)
+        val manual = requireManual(manualId)
+        val row = ErrorCodeEntity(
+            id = UUID.randomUUID().toString(),
+            modelId = manual.modelId,
+            manualId = manual.id,
+            code = code.trim(),
+            normalizedCode = normalized,
+            meaning = meaning.trim(),
+            causeAndFix = causeAndFix.trim(),
+            pageNumber = pageNumber,
+            status = ReviewStatus.CONFIRMED,
+            updatedAt = clock.millis(),
+        )
+        codes.upsertAll(listOf(row))
+        return row.id
+    }
+
+    /**
+     * Saves a maintenance task a person typed in for [manualId], already [ReviewStatus.CONFIRMED].
+     * The model is the manual's. [pageNumber] 0 means the task has no page. The name is trimmed.
+     *
+     * @return the id of the new row.
+     * @throws IllegalArgumentException when [intervalMonths] is below 1, when [name] is blank, when
+     *   [pageNumber] is negative, or when no manual has this id.
+     */
+    suspend fun addManualMaintenanceTask(
+        manualId: String,
+        name: String,
+        intervalMonths: Int,
+        pageNumber: Int = 0,
+    ): String {
+        requireValidInterval(intervalMonths)
+        require(name.isNotBlank()) { "name must not be blank" }
+        requireValidPage(pageNumber)
+        val manual = requireManual(manualId)
+        val row = MaintenanceTaskEntity(
+            id = UUID.randomUUID().toString(),
+            modelId = manual.modelId,
+            manualId = manual.id,
+            name = name.trim(),
+            intervalMonths = intervalMonths,
+            pageNumber = pageNumber,
+            status = ReviewStatus.CONFIRMED,
+            updatedAt = clock.millis(),
+        )
+        tasks.upsertAll(listOf(row))
+        return row.id
+    }
+
+    private fun requireValidInterval(intervalMonths: Int) =
+        require(intervalMonths >= 1) { "intervalMonths must be at least 1, was $intervalMonths" }
+
+    private fun requireValidPage(pageNumber: Int) =
+        require(pageNumber >= 0) { "pageNumber must not be negative, was $pageNumber" }
+
+    private suspend fun requireManual(manualId: String): ManualEntity =
+        requireNotNull(db.manualDao().findById(manualId)) { "no manual with id $manualId" }
 }

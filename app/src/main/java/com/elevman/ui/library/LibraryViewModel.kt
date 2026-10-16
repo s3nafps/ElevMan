@@ -18,12 +18,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 // A model whose manufacturer row is missing is still listed, under this name.
 internal const val UNKNOWN_MANUFACTURER = "Unknown manufacturer"
+
+internal const val ENTRY_FAILED_MESSAGE = "That entry could not be saved."
 
 /** The screens of the Library tab. Review and Import are full-screen: they hide the tab bar. */
 sealed interface LibraryPage {
@@ -56,8 +59,36 @@ data class ModelDetail(
 )
 
 /**
+ * The form open on the model page, for one manual: the codes and tasks a person types in by hand
+ * (the way in when a scanned PDF has no text to read). [manualTitle] is shown in the form so the
+ * person can see which manual the entry goes to.
+ */
+sealed interface ManualEntry {
+    val manualId: String
+    val manualTitle: String
+
+    /** The form for an error code. */
+    data class Code(override val manualId: String, override val manualTitle: String) : ManualEntry
+
+    /** The form for a maintenance task. */
+    data class Task(override val manualId: String, override val manualTitle: String) : ManualEntry
+}
+
+/**
+ * What the error code form hands over, already checked: [code] and [meaning] are not blank and
+ * trimmed, and [pageNumber] is 0 when the person left the page empty (0 means no page).
+ */
+data class NewCode(val code: String, val meaning: String, val causeAndFix: String, val pageNumber: Int)
+
+/** What the task form hands over, already checked: [intervalMonths] is at least 1. [pageNumber] 0 means no page. */
+data class NewTask(val name: String, val intervalMonths: Int, val pageNumber: Int)
+
+/**
  * What the Library tab shows. [pages] is the back stack, from the overview up to the screen on
  * top. [detail] is the model the top-most Model page is about, once [detailLoaded].
+ *
+ * [entry] is the entry form open on the model page, if any. While it is saving, [entrySaving] is
+ * true; when the save failed, [entryError] says so and the form stays open.
  */
 data class LibraryUiState(
     val pages: List<LibraryPage> = listOf(LibraryPage.Overview),
@@ -66,6 +97,9 @@ data class LibraryUiState(
     val manufacturers: List<ManufacturerGroup> = emptyList(),
     val detail: ModelDetail? = null,
     val detailLoaded: Boolean = false,
+    val entry: ManualEntry? = null,
+    val entryError: String? = null,
+    val entrySaving: Boolean = false,
 ) {
     val page: LibraryPage get() = pages.last()
 
@@ -78,6 +112,11 @@ data class LibraryUiState(
  * runs on [io]; a newer read cancels one still running, so what is shown is the latest.
  *
  * The number "N to review" of a model is [ReviewRepository.suggestedCount] summed over its manuals.
+ *
+ * The entry forms: [openCodeEntry] and [openTaskEntry] open one for a manual of the model page;
+ * [saveCode] and [saveTask] write it through [review] on [io], one save at a time. A save that
+ * works closes the form and reads the library again, so the new item is listed; one that fails
+ * leaves the form open with [ENTRY_FAILED_MESSAGE], to be tried again or cancelled.
  *
  * [scope] ends when the view model is cleared. It defaults to the main thread.
  */
@@ -107,7 +146,7 @@ class LibraryViewModel(
 
     /** Goes one page back. Does nothing on the overview. */
     fun back() {
-        mutableState.update { if (it.pages.size > 1) it.copy(pages = it.pages.dropLast(1)) else it }
+        mutableState.update { if (it.pages.size > 1) it.copy(pages = it.pages.dropLast(1)).withoutEntry() else it }
         reload()
     }
 
@@ -118,7 +157,7 @@ class LibraryViewModel(
                 pages = listOf(LibraryPage.Overview, LibraryPage.Model(modelId), LibraryPage.Review(manualId)),
                 detail = null,
                 detailLoaded = false,
-            )
+            ).withoutEntry()
         }
         reload()
     }
@@ -127,6 +166,7 @@ class LibraryViewModel(
     fun showModel(modelId: String) {
         mutableState.update {
             it.copy(pages = listOf(LibraryPage.Overview, LibraryPage.Model(modelId)), detail = null, detailLoaded = false)
+                .withoutEntry()
         }
         reload()
     }
@@ -134,9 +174,71 @@ class LibraryViewModel(
     private fun push(page: LibraryPage, resetDetail: Boolean = false) {
         mutableState.update {
             val pages = it.pages + page
-            if (resetDetail) it.copy(pages = pages, detail = null, detailLoaded = false) else it.copy(pages = pages)
+            val next = if (resetDetail) it.copy(pages = pages, detail = null, detailLoaded = false) else it.copy(pages = pages)
+            next.withoutEntry()
         }
         reload()
+    }
+
+    // An entry form belongs to the model page it was opened on; leaving the page leaves it.
+    private fun LibraryUiState.withoutEntry() = copy(entry = null, entryError = null)
+
+    /** Opens the error code form for [manualId], a manual of the model page. Does nothing for any other id. */
+    fun openCodeEntry(manualId: String) = openEntry(manualId) { id, title -> ManualEntry.Code(id, title) }
+
+    /** Opens the maintenance task form for [manualId], a manual of the model page. Does nothing for any other id. */
+    fun openTaskEntry(manualId: String) = openEntry(manualId) { id, title -> ManualEntry.Task(id, title) }
+
+    private fun openEntry(manualId: String, form: (id: String, title: String) -> ManualEntry) {
+        val manual = state.value.detail?.manuals?.firstOrNull { it.id == manualId } ?: return
+        mutableState.update { it.copy(entry = form(manual.id, manual.title), entryError = null) }
+    }
+
+    /** Closes the entry form without saving, and with it the message of a failed save. */
+    fun dismissEntry() {
+        mutableState.update { it.withoutEntry() }
+    }
+
+    /** Saves [values] as a confirmed error code of the manual the open form is for. Does nothing without an error code form. */
+    fun saveCode(values: NewCode) {
+        val entry = state.value.entry as? ManualEntry.Code ?: return
+        save(entry) {
+            review.addManualErrorCode(entry.manualId, values.code, values.meaning, values.causeAndFix, values.pageNumber)
+        }
+    }
+
+    /** Saves [values] as a confirmed maintenance task of the manual the open form is for. Does nothing without a task form. */
+    fun saveTask(values: NewTask) {
+        val entry = state.value.entry as? ManualEntry.Task ?: return
+        save(entry) {
+            review.addManualMaintenanceTask(entry.manualId, values.name, values.intervalMonths, values.pageNumber)
+        }
+    }
+
+    /**
+     * Runs [write] on [io]. A second save while one is running is ignored, so a double tap cannot
+     * write the entry twice. On success the form closes and the library is read again; on failure
+     * the form stays, with its message, as long as it is still the one that was saving.
+     */
+    private fun save(entry: ManualEntry, write: suspend () -> Unit) {
+        val before = mutableState.getAndUpdate { if (it.entrySaving) it else it.copy(entrySaving = true, entryError = null) }
+        if (before.entrySaving) return
+        scope.launch {
+            try {
+                withContext(io) { write() }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                mutableState.update {
+                    it.copy(entrySaving = false, entryError = if (it.entry == entry) ENTRY_FAILED_MESSAGE else null)
+                }
+                return@launch
+            }
+            mutableState.update {
+                it.copy(entrySaving = false, entry = if (it.entry == entry) null else it.entry, entryError = null)
+            }
+            reload()
+        }
     }
 
     /** Reads the library again: the overview, and the model of the top-most Model page. */
