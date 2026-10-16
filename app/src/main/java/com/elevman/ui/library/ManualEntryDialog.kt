@@ -17,6 +17,8 @@ import androidx.compose.ui.unit.dp
 import com.elevman.domain.normalizeCode
 import com.elevman.ui.review.CODE_REQUIRED_MESSAGE
 import com.elevman.ui.review.DialogFrame
+import com.elevman.ui.review.EditDialog
+import com.elevman.ui.review.EditTarget
 import com.elevman.ui.review.INTERVAL_TOO_SMALL_MESSAGE
 import com.elevman.ui.review.validInterval
 
@@ -27,15 +29,19 @@ internal const val TASK_NAME_REQUIRED_MESSAGE = "Enter the task name."
 private const val MAX_PAGE_DIGITS = 5
 
 /**
- * The entry form that is open, if any, on top of the model page. [error] is the message of a save
- * that failed; the form stays open and keeps what was typed. [onDismiss] closes it without saving.
+ * The entry form or edit dialog that is open, if any, on top of the model page. [error] is the
+ * message of a save that failed; the form stays open and keeps what was typed. [onDismiss] closes
+ * it without saving. The edit dialog is the review's own ([EditDialog]), so a typo in a code or task
+ * is corrected the same way there and here.
  */
 @Composable
 internal fun ManualEntryDialogs(
     entry: ManualEntry?,
+    editing: EditTarget?,
     error: String?,
     onSaveCode: (NewCode) -> Unit,
     onSaveTask: (NewTask) -> Unit,
+    onSaveEdit: (EditTarget) -> Unit,
     onDismiss: () -> Unit,
 ) {
     when (entry) {
@@ -43,6 +49,7 @@ internal fun ManualEntryDialogs(
         is ManualEntry.Code -> AddCodeDialog(entry, onSaveCode, onDismiss, error)
         is ManualEntry.Task -> AddTaskDialog(entry, onSaveTask, onDismiss, error)
     }
+    if (editing != null) EditDialog(target = editing, onSave = onSaveEdit, onDismiss = onDismiss, error = error)
 }
 
 /**

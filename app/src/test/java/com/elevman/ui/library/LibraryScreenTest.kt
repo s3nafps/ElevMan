@@ -175,6 +175,8 @@ class LibraryScreenTest {
         val reviewed = mutableListOf<String>()
         val codesAdded = mutableListOf<String>()
         val tasksAdded = mutableListOf<String>()
+        val codesEdited = mutableListOf<String>()
+        val tasksEdited = mutableListOf<String>()
     }
 
     private fun showModel(detail: ModelDetail?, loaded: Boolean = true, taps: Taps = Taps()): Taps {
@@ -187,6 +189,8 @@ class LibraryScreenTest {
                     onReview = { taps.reviewed += it },
                     onAddCode = { taps.codesAdded += it },
                     onAddTask = { taps.tasksAdded += it },
+                    onEditCode = { taps.codesEdited += it },
+                    onEditTask = { taps.tasksEdited += it },
                 )
             }
         }
@@ -298,5 +302,33 @@ class LibraryScreenTest {
         rule.onNodeWithText("Overspeed").performClick()
 
         assertEquals(listOf("man-2" to 1), taps.viewed)
+    }
+
+    // ---- Correcting what is listed ------------------------------------------------------------
+
+    @Test
+    fun everyConfirmedCodeAndTaskHasAnEditButtonThatNamesIt() {
+        val taps = showModel(detail)
+
+        rule.onNodeWithContentDescription("Edit error code E-21").performClick()
+        rule.onNodeWithContentDescription("Edit maintenance task Check brake").performClick()
+
+        assertEquals(listOf("c1"), taps.codesEdited)
+        assertEquals(listOf("t1"), taps.tasksEdited)
+        // Editing is not opening: neither tap left for the viewer or the review.
+        assertTrue(taps.viewed.isEmpty())
+        assertTrue(taps.reviewed.isEmpty())
+    }
+
+    @Test
+    fun editingACodeNeverReportsTheOtherCodeOrAddsAnything() {
+        val second = ErrorCodeEntity("c2", "m-gen2", "man-1", "E-30", "E30", "Overspeed", "", 0, ReviewStatus.CONFIRMED, 1L)
+        val taps = showModel(detail.copy(codes = detail.codes + second))
+
+        rule.onNodeWithContentDescription("Edit error code E-30").performClick()
+
+        assertEquals(listOf("c2"), taps.codesEdited)
+        assertTrue(taps.codesAdded.isEmpty())
+        assertTrue(taps.tasksAdded.isEmpty())
     }
 }

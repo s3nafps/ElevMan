@@ -128,9 +128,9 @@ fun LibraryRoute(
 }
 
 /**
- * The page of model [modelId]: its top bar, the model screen, and the entry form when one is open.
- * A saved entry closes the form and [library] reads the page again, so the new code or task is
- * listed. [onOpenManual] opens a manual in the PDF viewer at a page.
+ * The page of model [modelId]: its top bar, the model screen, and the entry form or edit dialog when
+ * one is open. A saved entry or correction closes it and [library] reads the page again, so the new
+ * or corrected code or task is listed. [onOpenManual] opens a manual in the PDF viewer at a page.
  */
 @Composable
 internal fun ModelPage(
@@ -150,13 +150,17 @@ internal fun ModelPage(
             onReview = library::openReview,
             onAddCode = library::openCodeEntry,
             onAddTask = library::openTaskEntry,
+            onEditCode = library::startEditCode,
+            onEditTask = library::startEditTask,
         )
     }
     ManualEntryDialogs(
         entry = state.entry,
+        editing = state.editing,
         error = state.entryError,
         onSaveCode = library::saveCode,
         onSaveTask = library::saveTask,
+        onSaveEdit = library::saveEdit,
         onDismiss = library::dismissEntry,
     )
 }

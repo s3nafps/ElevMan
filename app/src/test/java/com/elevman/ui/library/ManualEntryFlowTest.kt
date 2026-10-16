@@ -9,19 +9,24 @@ import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToNode
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.elevman.data.ElevManDatabase
 import com.elevman.data.ElevatorModelEntity
+import com.elevman.data.ErrorCodeEntity
+import com.elevman.data.MaintenanceTaskEntity
 import com.elevman.data.ManualEntity
 import com.elevman.data.ManufacturerEntity
 import com.elevman.data.ReviewRepository
 import com.elevman.data.ReviewStatus
+import com.elevman.ui.review.CHANGE_FAILED_MESSAGE
 import com.elevman.ui.theme.ElevManTheme
 import java.time.Clock
 import kotlinx.coroutines.CoroutineScope
@@ -203,5 +208,80 @@ class ManualEntryFlowTest {
         assertEquals(ReviewStatus.CONFIRMED, stored.status)
         assertEquals(12, stored.intervalMonths)
         assertEquals(0, stored.pageNumber)
+    }
+
+    // ---- Correcting what was entered ----------------------------------------------------------
+
+    @Test
+    fun aCodeTypedInWithATypoCanBeEditedFromTheModelPage() {
+        rule.onNodeWithText("Add code").performClick()
+        field("Code").performTextInput("e-22")
+        field("Meaning").performTextInput("Door lok fault")
+        rule.onNodeWithText("Save").performClick()
+        waitUntilGone("Save")
+        waitFor("Door lok fault")
+
+        rule.onNodeWithContentDescription("Edit error code e-22").performClick()
+        // The review's edit dialog, filled with what was saved.
+        rule.onNodeWithText("Edit error code").assertIsDisplayed()
+        field("Meaning").performTextClearance()
+        field("Meaning").performTextInput("Door lock fault")
+        rule.onNodeWithText("Save").performClick()
+        waitUntilGone("Save")
+        waitFor("Door lock fault")
+
+        rule.onNodeWithText("Door lok fault").assertDoesNotExist()
+        val stored = storedCodes().single()
+        assertEquals(ReviewStatus.CONFIRMED, stored.status)
+        assertEquals("Door lock fault", stored.meaning)
+        assertEquals("E22", stored.normalizedCode)
+    }
+
+    @Test
+    fun aFailedEditKeepsTheDialogOpenWithWhatWasTypedAndItsMessage() {
+        runBlocking {
+            db.errorCodeDao().upsertAll(
+                listOf(ErrorCodeEntity("c1", "m-gen2", "man-1", "E-21", "E21", "Door zone fault", "", 33, ReviewStatus.CONFIRMED, 1L)),
+            )
+        }
+        library.reload()
+        waitFor("Door zone fault")
+        // From now on the database refuses to change a code.
+        db.openHelper.writableDatabase.execSQL("CREATE TRIGGER no_insert BEFORE INSERT ON ErrorCodeEntity BEGIN SELECT RAISE(ABORT, 'blocked'); END")
+        db.openHelper.writableDatabase.execSQL("CREATE TRIGGER no_update BEFORE UPDATE ON ErrorCodeEntity BEGIN SELECT RAISE(ABORT, 'blocked'); END")
+
+        rule.onNodeWithContentDescription("Edit error code E-21").performClick()
+        field("Meaning").performTextClearance()
+        field("Meaning").performTextInput("Door lock fault")
+        rule.onNodeWithText("Save").performClick()
+        waitFor(CHANGE_FAILED_MESSAGE)
+
+        rule.onNodeWithText(CHANGE_FAILED_MESSAGE).assertIsDisplayed()
+        rule.onNodeWithText("Door lock fault").assertIsDisplayed()
+        rule.onNodeWithText("Save").assertIsDisplayed()
+        assertEquals("Door zone fault", storedCodes().single().meaning)
+    }
+
+    @Test
+    fun aTaskCanBeEditedFromTheModelPage() {
+        runBlocking {
+            db.maintenanceTaskDao().upsertAll(
+                listOf(MaintenanceTaskEntity("t1", "m-gen2", "man-1", "Check brake", 6, 0, ReviewStatus.CONFIRMED, 1L)),
+            )
+        }
+        library.reload()
+        waitFor("Add code")
+        rule.onNode(hasScrollAction()).performScrollToNode(hasText("Check brake"))
+
+        rule.onNodeWithContentDescription("Edit maintenance task Check brake").performClick()
+        field("Interval (months)").performTextClearance()
+        field("Interval (months)").performTextInput("12")
+        rule.onNodeWithText("Save").performClick()
+        waitUntilGone("Save")
+        rule.waitUntil(timeoutMillis = 10_000) { library.state.value.detail?.tasks?.any { it.intervalMonths == 12 } == true }
+
+        val stored = storedTasks().single()
+        assertEquals(12, stored.intervalMonths)
+        assertEquals(ReviewStatus.CONFIRMED, stored.status)
     }
 }

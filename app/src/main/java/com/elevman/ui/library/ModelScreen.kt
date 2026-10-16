@@ -35,7 +35,8 @@ internal const val MODEL_GONE_MESSAGE = "This model is no longer in the library.
  * [detail] is null while it is being read ([loaded] false) or when the model is gone.
  * [onOpenManual] opens a manual in the viewer at a page, [onReview] opens the review of a manual.
  * [onAddCode] and [onAddTask] open the form to type in an error code or a maintenance task of a
- * manual by hand; every manual has both, whatever its PDF holds. A code or task without a page
+ * manual by hand; every manual has both, whatever its PDF holds. [onEditCode] and [onEditTask]
+ * open the edit dialog of a listed code or task, to correct a typo. A code or task without a page
  * (page 0) shows none, and its code opens the manual at page 1.
  */
 @Composable
@@ -46,6 +47,8 @@ fun ModelScreen(
     onReview: (manualId: String) -> Unit,
     onAddCode: (manualId: String) -> Unit,
     onAddTask: (manualId: String) -> Unit,
+    onEditCode: (codeId: String) -> Unit,
+    onEditTask: (taskId: String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     if (detail == null) {
@@ -80,31 +83,39 @@ fun ModelScreen(
         item { SectionHeading("Error codes") }
         if (detail.codes.isEmpty()) item { Empty("No confirmed error codes yet.") }
         items(detail.codes, key = { "code/${it.id}" }) { code ->
-            Column(
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 64.dp)
-                    .clickable(
-                        onClickLabel = if (code.pageNumber > 0) "Open the manual at page ${code.pageNumber}" else "Open the manual",
-                    ) {
-                        // 0 is "no page" (a code typed in without one): the viewer starts at the first.
-                        onOpenManual(code.manualId, code.pageNumber.coerceAtLeast(1))
-                    }
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(start = 16.dp, end = 8.dp),
             ) {
-                Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
-                    Text(code.code, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                    if (code.pageNumber > 0) {
-                        Text(
-                            "Page ${code.pageNumber}",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .weight(1f)
+                        .clickable(
+                            onClickLabel = if (code.pageNumber > 0) "Open the manual at page ${code.pageNumber}" else "Open the manual",
+                        ) {
+                            // 0 is "no page" (a code typed in without one): the viewer starts at the first.
+                            onOpenManual(code.manualId, code.pageNumber.coerceAtLeast(1))
+                        }
+                        .padding(vertical = 12.dp),
+                ) {
+                    Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+                        Text(code.code, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        if (code.pageNumber > 0) {
+                            Text(
+                                "Page ${code.pageNumber}",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
+                    Text(code.meaning, style = MaterialTheme.typography.bodyLarge)
+                    if (code.causeAndFix.isNotBlank()) Text(code.causeAndFix, style = MaterialTheme.typography.bodyMedium)
                 }
-                Text(code.meaning, style = MaterialTheme.typography.bodyLarge)
-                if (code.causeAndFix.isNotBlank()) Text(code.causeAndFix, style = MaterialTheme.typography.bodyMedium)
+                EditButton(description = "Edit error code ${code.code}", onClick = { onEditCode(code.id) })
             }
             HorizontalDivider()
         }
@@ -112,18 +123,34 @@ fun ModelScreen(
         item { SectionHeading("Maintenance tasks") }
         if (detail.tasks.isEmpty()) item { Empty("No confirmed maintenance tasks yet.") }
         items(detail.tasks, key = { "task/${it.id}" }) { task ->
-            Column(
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 64.dp)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .padding(start = 16.dp, end = 8.dp),
             ) {
-                Text(task.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                Text("Every ${task.intervalMonths} months", style = MaterialTheme.typography.bodyLarge)
+                Column(modifier = Modifier.weight(1f).padding(vertical = 12.dp)) {
+                    Text(task.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                    Text("Every ${task.intervalMonths} months", style = MaterialTheme.typography.bodyLarge)
+                }
+                EditButton(description = "Edit maintenance task ${task.name}", onClick = { onEditTask(task.id) })
             }
             HorizontalDivider()
         }
     }
+}
+
+/** Every row has the same label, so the button also names its item for a screen reader. */
+@Composable
+private fun EditButton(description: String, onClick: () -> Unit) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier
+            .padding(start = 8.dp)
+            .heightIn(min = 48.dp)
+            .semantics { contentDescription = description },
+    ) { Text("Edit") }
 }
 
 @Composable

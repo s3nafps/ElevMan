@@ -9,6 +9,8 @@ import com.elevman.data.ErrorCodeEntity
 import com.elevman.data.MaintenanceTaskEntity
 import com.elevman.data.ReviewRepository
 import com.elevman.data.ReviewStatus
+import com.elevman.ui.review.CHANGE_FAILED_MESSAGE
+import com.elevman.ui.review.EditTarget
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -87,8 +89,9 @@ data class NewTask(val name: String, val intervalMonths: Int, val pageNumber: In
  * What the Library tab shows. [pages] is the back stack, from the overview up to the screen on
  * top. [detail] is the model the top-most Model page is about, once [detailLoaded].
  *
- * [entry] is the entry form open on the model page, if any. While it is saving, [entrySaving] is
- * true; when the save failed, [entryError] says so and the form stays open.
+ * [entry] is the entry form open on the model page, if any, and [editing] the edit dialog of a listed
+ * code or task (only one of the two is open at a time). While a save is running, [entrySaving] is
+ * true; when it failed, [entryError] says so and the form or dialog stays open.
  */
 data class LibraryUiState(
     val pages: List<LibraryPage> = listOf(LibraryPage.Overview),
@@ -98,6 +101,7 @@ data class LibraryUiState(
     val detail: ModelDetail? = null,
     val detailLoaded: Boolean = false,
     val entry: ManualEntry? = null,
+    val editing: EditTarget? = null,
     val entryError: String? = null,
     val entrySaving: Boolean = false,
 ) {
@@ -117,6 +121,11 @@ data class LibraryUiState(
  * [saveCode] and [saveTask] write it through [review] on [io], one save at a time. A save that
  * works closes the form and reads the library again, so the new item is listed; one that fails
  * leaves the form open with [ENTRY_FAILED_MESSAGE], to be tried again or cancelled.
+ *
+ * A listed code or task can be corrected: [startEditCode] and [startEditTask] open the review's edit
+ * dialog with its stored values, [saveEdit] writes it through [ReviewRepository.editErrorCode] or
+ * [ReviewRepository.editMaintenanceTask] (the status is kept) and works like the entry saves, with
+ * the review's [CHANGE_FAILED_MESSAGE] on a failure.
  *
  * [scope] ends when the view model is cleared. It defaults to the main thread.
  */
@@ -146,7 +155,7 @@ class LibraryViewModel(
 
     /** Goes one page back. Does nothing on the overview. */
     fun back() {
-        mutableState.update { if (it.pages.size > 1) it.copy(pages = it.pages.dropLast(1)).withoutEntry() else it }
+        mutableState.update { if (it.pages.size > 1) it.copy(pages = it.pages.dropLast(1)).withoutForm() else it }
         reload()
     }
 
@@ -157,7 +166,7 @@ class LibraryViewModel(
                 pages = listOf(LibraryPage.Overview, LibraryPage.Model(modelId), LibraryPage.Review(manualId)),
                 detail = null,
                 detailLoaded = false,
-            ).withoutEntry()
+            ).withoutForm()
         }
         reload()
     }
@@ -166,7 +175,7 @@ class LibraryViewModel(
     fun showModel(modelId: String) {
         mutableState.update {
             it.copy(pages = listOf(LibraryPage.Overview, LibraryPage.Model(modelId)), detail = null, detailLoaded = false)
-                .withoutEntry()
+                .withoutForm()
         }
         reload()
     }
@@ -175,13 +184,13 @@ class LibraryViewModel(
         mutableState.update {
             val pages = it.pages + page
             val next = if (resetDetail) it.copy(pages = pages, detail = null, detailLoaded = false) else it.copy(pages = pages)
-            next.withoutEntry()
+            next.withoutForm()
         }
         reload()
     }
 
-    // An entry form belongs to the model page it was opened on; leaving the page leaves it.
-    private fun LibraryUiState.withoutEntry() = copy(entry = null, entryError = null)
+    // An entry form or edit dialog belongs to the model page it was opened on; leaving the page leaves it.
+    private fun LibraryUiState.withoutForm() = copy(entry = null, editing = null, entryError = null)
 
     /** Opens the error code form for [manualId], a manual of the model page. Does nothing for any other id. */
     fun openCodeEntry(manualId: String) = openEntry(manualId) { id, title -> ManualEntry.Code(id, title) }
@@ -194,15 +203,19 @@ class LibraryViewModel(
         mutableState.update { it.copy(entry = form(manual.id, manual.title), entryError = null) }
     }
 
-    /** Closes the entry form without saving, and with it the message of a failed save. */
+    /** Closes the open entry form or edit dialog without saving, and with it the message of a failed save. */
     fun dismissEntry() {
-        mutableState.update { it.withoutEntry() }
+        mutableState.update { it.withoutForm() }
     }
 
     /** Saves [values] as a confirmed error code of the manual the open form is for. Does nothing without an error code form. */
     fun saveCode(values: NewCode) {
         val entry = state.value.entry as? ManualEntry.Code ?: return
-        save(entry) {
+        save(
+            isOpen = { it.entry == entry },
+            close = { it.copy(entry = null) },
+            failure = ENTRY_FAILED_MESSAGE,
+        ) {
             review.addManualErrorCode(entry.manualId, values.code, values.meaning, values.causeAndFix, values.pageNumber)
         }
     }
@@ -210,17 +223,62 @@ class LibraryViewModel(
     /** Saves [values] as a confirmed maintenance task of the manual the open form is for. Does nothing without a task form. */
     fun saveTask(values: NewTask) {
         val entry = state.value.entry as? ManualEntry.Task ?: return
-        save(entry) {
+        save(
+            isOpen = { it.entry == entry },
+            close = { it.copy(entry = null) },
+            failure = ENTRY_FAILED_MESSAGE,
+        ) {
             review.addManualMaintenanceTask(entry.manualId, values.name, values.intervalMonths, values.pageNumber)
+        }
+    }
+
+    /** Opens the edit dialog for the listed, confirmed error code [codeId]. Does nothing for any other id. */
+    fun startEditCode(codeId: String) {
+        val code = state.value.detail?.codes?.firstOrNull { it.id == codeId } ?: return
+        mutableState.update {
+            it.copy(editing = EditTarget.Code(code.id, code.code, code.meaning, code.causeAndFix), entry = null, entryError = null)
+        }
+    }
+
+    /** Opens the edit dialog for the listed, confirmed maintenance task [taskId]. Does nothing for any other id. */
+    fun startEditTask(taskId: String) {
+        val task = state.value.detail?.tasks?.firstOrNull { it.id == taskId } ?: return
+        mutableState.update {
+            it.copy(editing = EditTarget.Task(task.id, task.name, task.intervalMonths), entry = null, entryError = null)
+        }
+    }
+
+    /**
+     * Saves the corrected fields of the open edit dialog, through the review's own repository
+     * functions: the status is kept, so a code that was typed in stays confirmed. Does nothing without
+     * an open dialog for [target]'s item.
+     */
+    fun saveEdit(target: EditTarget) {
+        val open = state.value.editing ?: return
+        if (open::class != target::class || open.id != target.id) return
+        save(
+            isOpen = { it.editing == open },
+            close = { it.copy(editing = null) },
+            failure = CHANGE_FAILED_MESSAGE,
+        ) {
+            when (target) {
+                is EditTarget.Code -> review.editErrorCode(target.id, target.code, target.meaning, target.causeAndFix)
+                is EditTarget.Task -> review.editMaintenanceTask(target.id, target.name, target.intervalMonths)
+            }
         }
     }
 
     /**
      * Runs [write] on [io]. A second save while one is running is ignored, so a double tap cannot
-     * write the entry twice. On success the form closes and the library is read again; on failure
-     * the form stays, with its message, as long as it is still the one that was saving.
+     * write the entry twice. On success the form closes ([close]) and the library is read again; on
+     * failure the form stays, with [failure], as long as it is still the one that was saving ([isOpen]).
      */
-    private fun save(entry: ManualEntry, write: suspend () -> Unit) {
+    private fun save(
+        isOpen: (LibraryUiState) -> Boolean,
+        close: (LibraryUiState) -> LibraryUiState,
+        failure: String,
+        write: suspend () -> Unit,
+    ) {
         val before = mutableState.getAndUpdate { if (it.entrySaving) it else it.copy(entrySaving = true, entryError = null) }
         if (before.entrySaving) return
         scope.launch {
@@ -230,12 +288,13 @@ class LibraryViewModel(
                 throw e
             } catch (e: Exception) {
                 mutableState.update {
-                    it.copy(entrySaving = false, entryError = if (it.entry == entry) ENTRY_FAILED_MESSAGE else null)
+                    it.copy(entrySaving = false, entryError = if (isOpen(it)) failure else null)
                 }
                 return@launch
             }
             mutableState.update {
-                it.copy(entrySaving = false, entry = if (it.entry == entry) null else it.entry, entryError = null)
+                val saved = it.copy(entrySaving = false, entryError = null)
+                if (isOpen(it)) close(saved) else saved
             }
             reload()
         }

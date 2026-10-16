@@ -14,6 +14,8 @@ import com.elevman.data.ReviewRepository
 import com.elevman.data.ReviewStatus
 import com.elevman.domain.normalizeCode
 import com.elevman.ui.HoldNextIo
+import com.elevman.ui.review.CHANGE_FAILED_MESSAGE
+import com.elevman.ui.review.EditTarget
 import java.time.Clock
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.CoroutineDispatcher
@@ -386,6 +388,113 @@ class LibraryViewModelTest {
         library.back()
 
         assertNull(library.state.value.entry)
+        assertNull(library.state.value.entryError)
+    }
+
+    // ---- Correcting a listed code or task -----------------------------------------------------
+
+    @Test
+    fun anEditedHandEnteredCodeKeepsStatusConfirmedAndShowsItsNewText() {
+        seed()
+        val library = viewModel()
+        library.openModelPage()
+        library.openCodeEntry("man-2")
+        library.saveCode(NewCode("e-22", "Door lok fault", "", 12))
+        val listed = library.settled { s -> s.entry == null && s.detail?.codes?.any { it.code == "e-22" } == true }
+        val id = listed.detail!!.codes.single { it.code == "e-22" }.id
+
+        library.startEditCode(id)
+        assertEquals(EditTarget.Code(id, "e-22", "Door lok fault", ""), library.state.value.editing)
+        library.saveEdit(EditTarget.Code(id, "E-22", "Door lock fault", "Replace the lock"))
+        val state = library.settled { s -> s.editing == null && s.detail?.codes?.any { it.meaning == "Door lock fault" } == true }
+
+        val stored = runBlocking { db.errorCodeDao().findById(id)!! }
+        assertEquals(ReviewStatus.CONFIRMED, stored.status)
+        assertEquals("E-22", stored.code)
+        assertEquals("E22", stored.normalizedCode)
+        assertEquals("Door lock fault", stored.meaning)
+        assertEquals("Replace the lock", stored.causeAndFix)
+        // Edited in place: same manual, same page, and no second row.
+        assertEquals("man-2", stored.manualId)
+        assertEquals(12, stored.pageNumber)
+        assertEquals(1, savedCodes().count { it.normalizedCode == "E22" })
+        val shown = state.detail!!.codes.single { it.id == id }
+        assertEquals("Door lock fault", shown.meaning)
+        assertFalse(state.entrySaving)
+        assertNull(state.entryError)
+    }
+
+    @Test
+    fun anEditedTaskKeepsItsStatusAndShowsItsNewInterval() {
+        seed()
+        val library = viewModel()
+        library.openModelPage()
+
+        library.startEditTask("2")
+        assertEquals(EditTarget.Task("2", "Check brake", 6), library.state.value.editing)
+        library.saveEdit(EditTarget.Task("2", "Check the brake", 12))
+        val state = library.settled { s -> s.editing == null && s.detail?.tasks?.any { it.name == "Check the brake" } == true }
+
+        val stored = state.detail!!.tasks.single { it.id == "2" }
+        assertEquals(12, stored.intervalMonths)
+        assertEquals(ReviewStatus.CONFIRMED, stored.status)
+        assertEquals(1, savedTasks().count { it.manualId == "man-1" })
+    }
+
+    @Test
+    fun aFailedEditKeepsTheDialogOpenWithTheReviewsMessage() {
+        seed()
+        val library = viewModel()
+        library.openModelPage()
+        library.startEditTask("2")
+
+        // The repository refuses an interval below 1 (the dialog would not even ask).
+        library.saveEdit(EditTarget.Task("2", "Check the brake", 0))
+        val failed = library.settled { it.entryError != null }
+
+        assertEquals(CHANGE_FAILED_MESSAGE, failed.entryError)
+        assertEquals(EditTarget.Task("2", "Check brake", 6), failed.editing)
+        assertFalse(failed.entrySaving)
+        assertEquals("Check brake", savedTasks().single { it.id == "2" }.name)
+
+        // Cancel closes it and clears the message; trying again with good values saves.
+        library.startEditTask("2")
+        library.saveEdit(EditTarget.Task("2", "Check the brake", 3))
+        val saved = library.settled { it.editing == null && it.detail?.tasks?.any { t -> t.name == "Check the brake" } == true }
+        assertNull(saved.entryError)
+        library.dismissEntry()
+        assertNull(library.state.value.editing)
+    }
+
+    @Test
+    fun anEditCannotBeStartedForAnItemThatIsNotListed() {
+        seed()
+        val library = viewModel()
+        library.openModelPage()
+
+        // "1" is a suggestion (not listed here), "5" belongs to another model, "nope" does not exist.
+        for (id in listOf("1", "5", "nope")) {
+            library.startEditCode(id)
+            assertNull(id, library.state.value.editing)
+        }
+        library.startEditTask("1")
+        assertNull(library.state.value.editing)
+        // Saving with no edit open writes nothing.
+        library.saveEdit(EditTarget.Code("3", "X", "changed", ""))
+        assertFalse(library.state.value.entrySaving)
+        assertEquals("meaning 3", savedCodes().single { it.id == "3" }.meaning)
+    }
+
+    @Test
+    fun leavingTheModelPageClosesAnOpenEdit() {
+        seed()
+        val library = viewModel()
+        library.openModelPage()
+        library.startEditCode("3")
+
+        library.back()
+
+        assertNull(library.state.value.editing)
         assertNull(library.state.value.entryError)
     }
 }

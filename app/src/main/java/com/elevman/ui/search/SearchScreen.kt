@@ -130,7 +130,10 @@ private fun HitRow(hit: CodeHit, onClick: () -> Unit) {
             .fillMaxWidth()
             // Well over 48dp to tap.
             .heightIn(min = 64.dp)
-            .clickable(onClickLabel = "Open the manual at page ${hit.pageNumber}", onClick = onClick)
+            .clickable(
+                onClickLabel = if (hit.pageNumber > 0) "Open the manual at page ${hit.pageNumber}" else "Open the manual",
+                onClick = onClick,
+            )
             .padding(horizontal = 16.dp, vertical = 12.dp),
     ) {
         Row(
@@ -144,7 +147,8 @@ private fun HitRow(hit: CodeHit, onClick: () -> Unit) {
                 fontWeight = FontWeight.Bold,
             )
             Text(
-                text = "Page ${hit.pageNumber}",
+                // Page 0 is a code typed in by hand without a page: there is no page to name.
+                text = if (hit.pageNumber > 0) "Page ${hit.pageNumber}" else "No page",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

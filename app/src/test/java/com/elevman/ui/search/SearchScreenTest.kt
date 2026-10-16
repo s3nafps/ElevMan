@@ -3,6 +3,8 @@ package com.elevman.ui.search
 import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.v2.createComposeRule
@@ -93,6 +95,42 @@ class SearchScreenTest {
 
         rule.onNodeWithText("E-21", substring = true).assertIsDisplayed()
         rule.onNodeWithText("Page 12", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun aResultWithNoPageSaysNoPageAndNeverPageZero() {
+        // A code typed in by hand without a page is stored with page 0.
+        show(SearchUiState("e21", listOf("Alpha 100" to listOf(hit(code = "E-21", pageNumber = 0)))))
+
+        rule.onNodeWithText("E-21", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("No page").assertIsDisplayed()
+        rule.onAllNodesWithText("Page", substring = true).assertCountEquals(0)
+        // The spoken label does not promise a page either.
+        val row = rule.onNode(hasClickAction() and hasText("E-21", substring = true))
+        val label = row.fetchSemanticsNode().config[SemanticsActions.OnClick].label
+        assertEquals("Open the manual", label)
+    }
+
+    @Test
+    fun aResultWithAPageStillShowsThePageAndNotNoPage() {
+        show(SearchUiState("e21", listOf("Alpha 100" to listOf(hit(pageNumber = 12)))))
+
+        rule.onNodeWithText("Page 12").assertIsDisplayed()
+        rule.onAllNodesWithText("No page").assertCountEquals(0)
+    }
+
+    @Test
+    fun tappingAResultWithNoPageOpensItsManualJustAsBefore() {
+        val opened = mutableListOf<Pair<String, Int>>()
+        show(
+            SearchUiState("e21", listOf("Alpha 100" to listOf(hit(meaning = "Door fault", manualId = "manual-7", pageNumber = 0)))),
+            onOpen = { manualId, page -> opened += manualId to page },
+        )
+
+        rule.onNodeWithText("Door fault").performClick()
+
+        // Unchanged: the page is handed on as it is; the viewer starts at its first page for 0.
+        assertEquals(listOf("manual-7" to 0), opened)
     }
 
     @Test
