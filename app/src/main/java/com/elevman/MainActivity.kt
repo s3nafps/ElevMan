@@ -33,6 +33,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // The activity is singleTop, so a PDF shared while it is on screen arrives here, not in a second
+    // copy of the app. It goes to the same import step as a PDF shared at start-up. The intent is not
+    // stored with setIntent: nothing reads it after onCreate, and a recreated activity ignores it.
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         pdfFrom(intent)?.let { incomingPdf = it }

@@ -1,5 +1,6 @@
 package com.elevman.ui.review
 
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
@@ -221,6 +222,8 @@ class ReviewScreenTest {
         var dismissed = 0
     }
 
+    private val saveError = mutableStateOf<String?>(null)
+
     private fun showEdit(target: EditTarget, saved: Saved = Saved()): Saved {
         rule.setContent {
             ElevManTheme {
@@ -228,6 +231,7 @@ class ReviewScreenTest {
                     target = target,
                     onSave = { saved.targets += it },
                     onDismiss = { saved.dismissed++ },
+                    error = saveError.value,
                 )
             }
         }
@@ -325,6 +329,22 @@ class ReviewScreenTest {
         field("Interval (months)").performTextInput("4")
 
         rule.onNodeWithText("Interval must be at least 1 month.").assertDoesNotExist()
+    }
+
+    @Test
+    fun aFailedSaveShowsItsMessageInsideTheDialogAndKeepsWhatWasTyped() {
+        showEdit(EditTarget.Code("c1", "E-21", "Door fault", ""))
+        field("Meaning").performTextClearance()
+        field("Meaning").performTextInput("Door lock fault")
+        rule.onNodeWithText("That change could not be saved.").assertDoesNotExist()
+
+        // The save was refused: the screen tells the dialog.
+        rule.runOnUiThread { saveError.value = "That change could not be saved." }
+        rule.waitForIdle()
+
+        rule.onNodeWithText("That change could not be saved.").assertIsDisplayed()
+        rule.onNodeWithText("Door lock fault").assertIsDisplayed()
+        rule.onNodeWithText("Save").assertIsDisplayed()
     }
 
     @Test

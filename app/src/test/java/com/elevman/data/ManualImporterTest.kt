@@ -12,6 +12,7 @@ import java.io.IOException
 import java.time.Clock
 import java.time.Instant
 import java.time.ZoneOffset
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -185,16 +186,39 @@ class ManualImporterTest {
     }
 
     @Test
-    fun otherExceptionsFromTextSourcePropagate() = runTest {
+    fun anyExceptionFromTextSourceIsUnreadableAndKeepsTheManual() = runTest {
+        // Not only IOException: a PDF the library chokes on can throw a RuntimeException, as the viewer knows.
         fake.failure = IllegalStateException("not an IO problem")
 
-        try {
-            importer.import(pdf("odd"), "model-1", "Odd Manual")
-            fail("expected the exception to propagate")
-        } catch (expected: IllegalStateException) {
-            assertEquals("not an IO problem", expected.message)
-        }
+        val result = importer.import(pdf("odd"), "model-1", "Odd Manual")
+
+        assertEquals(ImportResult.Unreadable("manual-1", "not an IO problem"), result)
+        val manual = db.manualDao().getAll().single()
+        assertEquals("manual-1", manual.id)
+        assertEquals(0, manual.pageCount)
         assertTrue(db.errorCodeDao().getAll().isEmpty())
+        assertTrue(File(File(filesDir, "manuals"), "manual-1.pdf").exists())
+    }
+
+    @Test
+    fun aRuntimeExceptionWithoutMessageReportsItsClassName() = runTest {
+        fake.failure = RuntimeException()
+
+        val result = importer.import(pdf("odd"), "model-1", "Odd Manual")
+
+        assertEquals(ImportResult.Unreadable("manual-1", "java.lang.RuntimeException"), result)
+    }
+
+    @Test
+    fun cancellationFromTextSourceIsNotTurnedIntoUnreadable() = runTest {
+        fake.failure = CancellationException("the screen was left")
+
+        try {
+            importer.import(pdf("cancelled"), "model-1", "Manual")
+            fail("expected the cancellation to propagate")
+        } catch (expected: CancellationException) {
+            assertEquals("the screen was left", expected.message)
+        }
     }
 
     @Test

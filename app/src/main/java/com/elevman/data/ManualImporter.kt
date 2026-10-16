@@ -6,10 +6,10 @@ import com.elevman.domain.normalizeCode
 import com.elevman.pdf.PageTextSource
 import com.elevman.pdf.SuggestionParser
 import com.elevman.pdf.hasAnyText
-import java.io.IOException
 import java.io.InputStream
 import java.time.Clock
 import java.util.UUID
+import kotlin.coroutines.cancellation.CancellationException
 
 sealed interface ImportResult {
     /** The manual was stored and its suggestions are waiting for review. */
@@ -21,7 +21,10 @@ sealed interface ImportResult {
     /** A PDF with identical bytes was imported before; nothing was stored or extracted. */
     data class Duplicate(val existingManualId: String, val existingTitle: String) : ImportResult
 
-    /** The manual was stored, but the PDF could not be parsed. It has no page count and no suggestions. */
+    /**
+     * The manual was stored, but its text could not be read (the PDF is damaged, or the reader threw).
+     * It has no page count and no suggestions.
+     */
     data class Unreadable(val manualId: String, val reason: String) : ImportResult
 }
 
@@ -52,7 +55,11 @@ class ManualImporter(
 
         val pages = try {
             text.pages(stored.file)
-        } catch (e: IOException) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Any failure to read the text, not only an IOException: a PDF the library chokes on can
+            // throw a RuntimeException, and the viewer treats that as an unreadable PDF too.
             // The row stays so the person can see the manual and open it, with pageCount 0.
             return ImportResult.Unreadable(stored.manualId, e.message ?: e.javaClass.name)
         }

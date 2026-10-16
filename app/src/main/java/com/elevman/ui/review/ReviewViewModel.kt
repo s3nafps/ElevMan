@@ -89,8 +89,9 @@ class ReviewViewModel(
         }
     }
 
+    /** Closes the dialog without saving. A message of a failed save was for the dialog, so it goes too. */
     fun dismissEdit() {
-        mutableState.update { it.copy(editing = null) }
+        mutableState.update { it.copy(editing = null, message = null) }
     }
 
     /** Saves the corrected fields of [target], then closes the dialog. The item keeps its status. */

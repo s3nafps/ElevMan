@@ -64,7 +64,8 @@ internal fun PageThumbnail(file: File, pageNumber: Int, modifier: Modifier = Mod
 
 /**
  * Draws page [pageNumber] (1-based) of [file] as large as fits inside [maxWidthPx] by [maxHeightPx],
- * on white. Blocks, so call it off the main thread. Returns null when the page does not exist.
+ * on white. Blocks, so call it off the main thread. Returns null when the page does not exist or
+ * there is not enough memory to draw it.
  *
  * The descriptor and the renderer are always closed, whether or not the page was drawn.
  *
@@ -82,12 +83,21 @@ private fun renderPage(file: File, pageNumber: Int, maxWidthPx: Int, maxHeightPx
             val fit = min(maxWidthPx.toFloat() / page.width, maxHeightPx.toFloat() / page.height)
             val width = (page.width * fit).roundToInt().coerceAtLeast(1)
             val height = (page.height * fit).roundToInt().coerceAtLeast(1)
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            // The one Error caught, here and around the render: a big page on a small heap is a page
+            // that cannot be drawn (the placeholder shows), not a reason to stop the app.
+            val bitmap = try {
+                Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            } catch (e: OutOfMemoryError) {
+                return@use null
+            }
             try {
                 // PdfRenderer draws onto what is there, and a transparent page would show black text on black.
                 bitmap.eraseColor(Color.WHITE)
                 page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
                 bitmap
+            } catch (e: OutOfMemoryError) {
+                bitmap.recycle()
+                null
             } catch (e: Throwable) {
                 bitmap.recycle()
                 throw e

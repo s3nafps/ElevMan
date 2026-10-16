@@ -28,8 +28,8 @@ class LibraryScreenTest {
     private val overview = LibraryUiState(
         loaded = true,
         manufacturers = listOf(
-            ManufacturerGroup("Otis", listOf(ModelSummary("m-gen2", "Gen2", toReview = 3), ModelSummary("m-alpha", "Alpha", 0))),
-            ManufacturerGroup("Schindler", listOf(ModelSummary("m-3300", "3300", 12))),
+            ManufacturerGroup("mk-o", "Otis", listOf(ModelSummary("m-gen2", "Gen2", toReview = 3), ModelSummary("m-alpha", "Alpha", 0))),
+            ManufacturerGroup("mk-s", "Schindler", listOf(ModelSummary("m-3300", "3300", 12))),
         ),
     )
 
@@ -71,6 +71,57 @@ class LibraryScreenTest {
         // Two of the three models have something waiting; Alpha has not.
         rule.onAllNodesWithText("to review", substring = true).assertCountEquals(2)
         rule.onNodeWithText("0 to review").assertDoesNotExist()
+    }
+
+    @Test
+    fun twoManufacturersWithTheSameNameAreBothListed() {
+        showOverview(
+            LibraryUiState(
+                loaded = true,
+                manufacturers = listOf(
+                    ManufacturerGroup("mk-1", "Otis", listOf(ModelSummary("m1", "Gen2", 0))),
+                    ManufacturerGroup("mk-2", "Otis", listOf(ModelSummary("m2", "Alpha", 0))),
+                ),
+            ),
+        )
+
+        rule.onAllNodesWithText("Otis").assertCountEquals(2)
+        rule.onNodeWithText("Gen2").assertIsDisplayed()
+        rule.onNodeWithText("Alpha").assertIsDisplayed()
+    }
+
+    @Test
+    fun aRealManufacturerNamedLikeTheUnknownGroupDoesNotClashWithIt() {
+        // The group of models with no manufacturer row, and a real manufacturer that happens to have its name.
+        showOverview(
+            LibraryUiState(
+                loaded = true,
+                manufacturers = listOf(
+                    ManufacturerGroup("mk-1", UNKNOWN_MANUFACTURER, listOf(ModelSummary("m1", "Gen2", 0))),
+                    ManufacturerGroup(null, UNKNOWN_MANUFACTURER, listOf(ModelSummary("m2", "Alpha", 0))),
+                ),
+            ),
+        )
+
+        rule.onAllNodesWithText(UNKNOWN_MANUFACTURER).assertCountEquals(2)
+        rule.onNodeWithText("Gen2").assertIsDisplayed()
+        rule.onNodeWithText("Alpha").assertIsDisplayed()
+    }
+
+    @Test
+    fun aManufacturerWhoseIdLooksLikeAKeyDoesNotClashWithTheUnknownGroup() {
+        showOverview(
+            LibraryUiState(
+                loaded = true,
+                manufacturers = listOf(
+                    ManufacturerGroup("unknown-manufacturer", "Real", listOf(ModelSummary("m1", "Gen2", 0))),
+                    ManufacturerGroup(null, UNKNOWN_MANUFACTURER, listOf(ModelSummary("m2", "Alpha", 0))),
+                ),
+            ),
+        )
+
+        rule.onNodeWithText("Real").assertIsDisplayed()
+        rule.onNodeWithText(UNKNOWN_MANUFACTURER).assertIsDisplayed()
     }
 
     @Test

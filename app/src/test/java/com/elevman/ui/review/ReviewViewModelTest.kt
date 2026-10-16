@@ -172,6 +172,34 @@ class ReviewViewModelTest {
     }
 
     @Test
+    fun aFailedSaveKeepsTheEditOpenAndExposesTheMessageForTheDialog() {
+        val item = settled { true }.items.first { it.id == "t-1" }
+        viewModel.startEdit(item)
+        val loaded = settled { it.editing != null }.editing
+
+        viewModel.save(EditTarget.Task("t-1", "x", 0))
+        val state = settled { it.message != null }
+
+        // The dialog stays up, so what was typed is still there, and it can show the message.
+        assertEquals(loaded, state.editing)
+        assertEquals(CHANGE_FAILED_MESSAGE, state.message)
+    }
+
+    @Test
+    fun cancellingAfterAFailedSaveClearsItsMessage() {
+        val item = settled { true }.items.first { it.id == "t-1" }
+        viewModel.startEdit(item)
+        settled { it.editing != null }
+        viewModel.save(EditTarget.Task("t-1", "x", 0))
+        settled { it.message != null }
+
+        viewModel.dismissEdit()
+
+        assertNull(viewModel.state.value.editing)
+        assertNull(viewModel.state.value.message)
+    }
+
+    @Test
     fun dismissingTheEditClosesTheDialogWithoutSaving() {
         val item = settled { true }.items.first { it.id == "c-a" }
         viewModel.startEdit(item)

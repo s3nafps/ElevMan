@@ -36,7 +36,11 @@ sealed interface LibraryPage {
 /** A model in the list. [toReview] is the number of suggestions waiting, over all of its manuals. */
 data class ModelSummary(val id: String, val name: String, val toReview: Int)
 
-data class ManufacturerGroup(val name: String, val models: List<ModelSummary>)
+/**
+ * A manufacturer and its models. [id] is the manufacturer's id, which is what tells two manufacturers
+ * of the same name apart; it is null for the group of models whose manufacturer row is missing.
+ */
+data class ManufacturerGroup(val id: String?, val name: String, val models: List<ModelSummary>)
 
 /** A manual of a model. [toReview] is the number of its suggestions still waiting. */
 data class ManualSummary(val id: String, val title: String, val pageCount: Int, val toReview: Int)
@@ -178,10 +182,10 @@ class LibraryViewModel(
 
         val makerIds = makers.map { it.id }.toSet()
         val groups = makers.sortedWith(compareBy(byName) { it.name })
-            .map { maker -> ManufacturerGroup(maker.name, summaries(models.filter { it.manufacturerId == maker.id })) }
+            .map { maker -> ManufacturerGroup(maker.id, maker.name, summaries(models.filter { it.manufacturerId == maker.id })) }
             .toMutableList()
         val orphans = models.filter { it.manufacturerId !in makerIds }
-        if (orphans.isNotEmpty()) groups += ManufacturerGroup(UNKNOWN_MANUFACTURER, summaries(orphans))
+        if (orphans.isNotEmpty()) groups += ManufacturerGroup(null, UNKNOWN_MANUFACTURER, summaries(orphans))
 
         val detail = modelId?.let { id ->
             models.firstOrNull { it.id == id }?.let { model ->

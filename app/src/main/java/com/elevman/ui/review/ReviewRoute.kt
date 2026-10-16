@@ -56,12 +56,18 @@ fun ReviewRoute(
                 onAcceptAll = viewModel::acceptAll,
                 thumbnail = { item -> PageThumbnail(file = file, pageNumber = item.pageNumber) },
                 onOpenPage = { item -> onOpenPage(manualId, item.pageNumber) },
-                message = state.message,
+                // While the dialog is open the message is shown in it, not behind it.
+                message = state.message.takeIf { state.editing == null },
             )
         }
     }
 
     state.editing?.let { target ->
-        EditDialog(target = target, onSave = viewModel::save, onDismiss = viewModel::dismissEdit)
+        EditDialog(
+            target = target,
+            onSave = viewModel::save,
+            onDismiss = viewModel::dismissEdit,
+            error = state.message,
+        )
     }
 }

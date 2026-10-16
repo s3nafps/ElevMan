@@ -16,6 +16,7 @@ import com.elevman.pdf.PageTextSource
 import com.elevman.pdf.PdfBoxTextSource
 import java.io.File
 import java.time.Clock
+import kotlinx.coroutines.sync.Mutex
 
 /**
  * Builds the database and the services on top of it, once, and hands the same instances to every
@@ -59,6 +60,13 @@ class AppContainer(context: Context) {
     )
 
     val review: ReviewRepository = ReviewRepository(db, clock)
+
+    /**
+     * Held for the whole of one import: the model save, the duplicate check and the importer. Two
+     * imports (for example a picked PDF and a shared one) take turns, so they cannot both create
+     * the same new manufacturer or both store the same PDF. One lock, shared by every screen.
+     */
+    val importLock: Mutex = Mutex()
 
     val search: CodeSearch = CodeSearch(db)
 

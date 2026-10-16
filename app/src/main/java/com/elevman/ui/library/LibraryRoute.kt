@@ -34,7 +34,12 @@ fun LibraryRoute(
 ) {
     val resolver = LocalContext.current.applicationContext.contentResolver
     val importViewModel: ImportViewModel = viewModel(
-        factory = ImportViewModel.factory(container.importer, container.db, ContentResolverPdfSource(resolver)),
+        factory = ImportViewModel.factory(
+            importer = container.importer,
+            db = container.db,
+            pdfs = ContentResolverPdfSource(resolver),
+            importLock = container.importLock,
+        ),
     )
     val state by library.state.collectAsStateWithLifecycle()
     val importState by importViewModel.state.collectAsStateWithLifecycle()

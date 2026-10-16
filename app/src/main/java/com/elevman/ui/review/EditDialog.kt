@@ -9,6 +9,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -18,6 +19,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 
@@ -52,21 +56,25 @@ private val ButtonHeight = 48.dp
  * A dialog to correct one suggestion. It checks the fields itself: [onSave] is called only with
  * values the repository will accept (a task interval of at least 1 month, and a code or name that
  * is not empty), as a copy of [target] with the new values. Nothing is changed until then.
+ *
+ * [error] is shown inside the dialog, for a save the repository refused after [onSave]. The dialog
+ * stays open and keeps what was typed.
  */
 @Composable
 internal fun EditDialog(
     target: EditTarget,
     onSave: (EditTarget) -> Unit,
     onDismiss: () -> Unit,
+    error: String? = null,
 ) {
     when (target) {
-        is EditTarget.Code -> EditCodeDialog(target, onSave, onDismiss)
-        is EditTarget.Task -> EditTaskDialog(target, onSave, onDismiss)
+        is EditTarget.Code -> EditCodeDialog(target, onSave, onDismiss, error)
+        is EditTarget.Task -> EditTaskDialog(target, onSave, onDismiss, error)
     }
 }
 
 @Composable
-private fun EditCodeDialog(target: EditTarget.Code, onSave: (EditTarget) -> Unit, onDismiss: () -> Unit) {
+private fun EditCodeDialog(target: EditTarget.Code, onSave: (EditTarget) -> Unit, onDismiss: () -> Unit, error: String?) {
     var code by rememberSaveable(target.id) { mutableStateOf(target.code) }
     var meaning by rememberSaveable(target.id) { mutableStateOf(target.meaning) }
     var causeAndFix by rememberSaveable(target.id) { mutableStateOf(target.causeAndFix) }
@@ -82,6 +90,7 @@ private fun EditCodeDialog(target: EditTarget.Code, onSave: (EditTarget) -> Unit
             }
         },
         onDismiss = onDismiss,
+        error = error,
     ) {
         OutlinedTextField(
             value = code,
@@ -111,7 +120,7 @@ private fun EditCodeDialog(target: EditTarget.Code, onSave: (EditTarget) -> Unit
 }
 
 @Composable
-private fun EditTaskDialog(target: EditTarget.Task, onSave: (EditTarget) -> Unit, onDismiss: () -> Unit) {
+private fun EditTaskDialog(target: EditTarget.Task, onSave: (EditTarget) -> Unit, onDismiss: () -> Unit, error: String?) {
     var name by rememberSaveable(target.id) { mutableStateOf(target.name) }
     var interval by rememberSaveable(target.id) { mutableStateOf(target.intervalMonths.toString()) }
     var nameMissing by rememberSaveable(target.id) { mutableStateOf(false) }
@@ -129,6 +138,7 @@ private fun EditTaskDialog(target: EditTarget.Task, onSave: (EditTarget) -> Unit
             }
         },
         onDismiss = onDismiss,
+        error = error,
     ) {
         OutlinedTextField(
             value = name,
@@ -164,13 +174,27 @@ private fun DialogFrame(
     title: String,
     onSave: () -> Unit,
     onDismiss: () -> Unit,
+    error: String?,
     fields: @Composable () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) { fields() }
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                fields()
+                // Inside the dialog, where the person is looking: the screen behind it is dimmed.
+                if (error != null) {
+                    Text(
+                        text = error,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier
+                            .padding(top = 8.dp)
+                            .semantics { liveRegion = LiveRegionMode.Polite },
+                    )
+                }
+            }
         },
         confirmButton = {
             Button(onClick = onSave, modifier = Modifier.heightIn(min = ButtonHeight)) { Text("Save") }

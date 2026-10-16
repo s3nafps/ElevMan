@@ -29,11 +29,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 internal const val NO_TEXT_MESSAGE = "No text found in this PDF. Enter codes by hand."
 internal const val UNREADABLE_MESSAGE = "This PDF could not be read."
-internal const val IMPORT_FAILED_MESSAGE = "The PDF could not be imported. Check that the phone has free space, then try again."
+internal const val IMPORT_FAILED_MESSAGE = "This PDF could not be imported. Try again."
 
 /**
  * What the person is told when an import ends without a manual to review. An imported manual is
@@ -61,7 +63,10 @@ sealed interface ImportNotice {
         override val message: String get() = UNREADABLE_MESSAGE
     }
 
-    /** The import stopped on an error (for example, no space left); nothing was stored. */
+    /**
+     * The import stopped on an unexpected error (for example, no space left). The PDF may or may not
+     * have been stored by then: if it was, the library lists it.
+     */
     data object Failed : ImportNotice {
         override val message: String get() = IMPORT_FAILED_MESSAGE
         override val modelId: String? get() = null
@@ -141,9 +146,14 @@ data class ImportUiState(
  * Runs the import of one PDF: the title and model step first, then [ManualImporter.import], always
  * on [io] and never on the main thread. This is the only caller of the importer.
  *
- * A new model (and its manufacturer) is saved only once the PDF has been stored, so a duplicate
- * leaves no empty model behind. The import itself, and that save, run as one step that a Back or a
- * cleared view model does not interrupt: a manual must never be stored under a model that is not.
+ * A new model (and its manufacturer) is saved before the PDF is imported, so a stored manual always
+ * has its model. If the PDF turns out to be a duplicate, the rows this import just made are empty
+ * and are deleted again; rows that were there before are never touched. A failing import keeps them,
+ * because the manual may already have been stored.
+ *
+ * The whole import runs as one step that a Back or a cleared view model does not interrupt, and it
+ * holds [importLock] throughout (the model lookup and save, the duplicate check, the importer), so
+ * two imports at once take turns. The lock is shared by every import in the app.
  *
  * [scope] ends when the view model is cleared. It defaults to the main thread.
  */
@@ -153,6 +163,7 @@ class ImportViewModel(
     private val models: ElevatorModelDao,
     private val manuals: ManualDao,
     private val pdfs: PdfSource,
+    private val importLock: Mutex,
     private val clock: Clock = Clock.systemUTC(),
     private val newId: () -> String = { UUID.randomUUID().toString() },
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate),
@@ -219,13 +230,13 @@ class ImportViewModel(
 
     private class Outcome(val notice: ImportNotice? = null, val finished: ImportFinished? = null)
 
-    private suspend fun run(uri: Uri, form: ImportUiState): Outcome {
+    private suspend fun run(uri: Uri, form: ImportUiState): Outcome = importLock.withLock {
         val plan = try {
             planModel(form)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            return Outcome(ImportNotice.Failed)
+            return@withLock Outcome(ImportNotice.Failed)
         }
 
         val input = try {
@@ -235,17 +246,35 @@ class ImportViewModel(
         } catch (e: SecurityException) {
             // The permission to read a shared PDF can end with the app that shared it.
             null
-        } ?: return Outcome(ImportNotice.Unreadable(modelId = null))
+        } ?: return@withLock Outcome(ImportNotice.Unreadable(modelId = null))
 
-        val result = try {
-            input.use { importer.import(it, plan.modelId, form.title.trim()) }
+        input.use { importPlanned(it, plan, form.title.trim()) }
+    }
+
+    /** Saves the new model, then imports [stream] under it. Called with [importLock] held. */
+    private suspend fun importPlanned(stream: InputStream, plan: ModelPlan, title: String): Outcome {
+        // Before the import, so the manual that gets stored always has its model.
+        try {
+            plan.manufacturer?.let { manufacturers.upsertAll(listOf(it)) }
+            plan.model?.let { models.upsertAll(listOf(it)) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            discard(plan)
+            return Outcome(ImportNotice.Failed)
+        }
+
+        val result = try {
+            importer.import(stream, plan.modelId, title)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The manual may be stored by now, so the model stays.
             return Outcome(ImportNotice.Failed)
         }
 
         if (result is ImportResult.Duplicate) {
+            discard(plan)
             val existingModel = try {
                 manuals.findById(result.existingManualId)?.modelId
             } catch (e: Exception) {
@@ -253,17 +282,21 @@ class ImportViewModel(
             }
             return Outcome(result.toNotice(existingModel))
         }
-
-        // The manual is stored, so the model it points at has to exist.
-        try {
-            plan.manufacturer?.let { manufacturers.upsertAll(listOf(it)) }
-            plan.model?.let { models.upsertAll(listOf(it)) }
-        } catch (e: Exception) {
-            return Outcome(ImportNotice.Failed)
-        }
         return when (result) {
             is ImportResult.Imported -> Outcome(finished = ImportFinished(plan.modelId, result.manualId))
             else -> Outcome(result.toNotice(plan.modelId))
+        }
+    }
+
+    /** Deletes the rows [plan] made: the model first, then its manufacturer. Rows that were already there are not in it. */
+    private suspend fun discard(plan: ModelPlan) {
+        try {
+            plan.model?.let { models.deleteById(it.id) }
+            plan.manufacturer?.let { manufacturers.deleteById(it.id) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // An empty model left behind is harmless, and the person still has to be told the result.
         }
     }
 
@@ -305,9 +338,9 @@ class ImportViewModel(
         displayName.orEmpty().trim().removeSuffix(".pdf").removeSuffix(".PDF").trim()
 
     companion object {
-        fun factory(importer: ManualImporter, db: ElevManDatabase, pdfs: PdfSource) = viewModelFactory {
+        fun factory(importer: ManualImporter, db: ElevManDatabase, pdfs: PdfSource, importLock: Mutex) = viewModelFactory {
             initializer {
-                ImportViewModel(importer, db.manufacturerDao(), db.elevatorModelDao(), db.manualDao(), pdfs)
+                ImportViewModel(importer, db.manufacturerDao(), db.elevatorModelDao(), db.manualDao(), pdfs, importLock)
             }
         }
     }

@@ -68,8 +68,8 @@ fun LibraryScreen(
             state.manufacturers.isEmpty() -> Message(LIBRARY_EMPTY_MESSAGE)
             else -> LazyColumn {
                 for (group in state.manufacturers) {
-                    item(key = "maker/${group.name}") { ManufacturerHeading(group.name) }
-                    items(group.models, key = { it.id }) { model ->
+                    item(key = headingKey(group)) { ManufacturerHeading(group.name) }
+                    items(group.models, key = { "model/${it.id}" }) { model ->
                         ModelRow(model, onClick = { onOpenModel(model.id) })
                         HorizontalDivider()
                     }
@@ -78,6 +78,14 @@ fun LibraryScreen(
         }
     }
 }
+
+// Every key in the list starts with its kind, so a manufacturer id can never equal a model id; the
+// group of models with no manufacturer has no id and a key no "maker/<id>" can be equal to.
+private const val UNKNOWN_MANUFACTURER_KEY = "unknown-manufacturer"
+
+/** Names the heading by the manufacturer's id: two manufacturers can have the same name. */
+private fun headingKey(group: ManufacturerGroup): String =
+    group.id?.let { "maker/$it" } ?: UNKNOWN_MANUFACTURER_KEY
 
 @Composable
 private fun Message(text: String) {

@@ -13,6 +13,9 @@ interface ManufacturerDao {
 
     @Query("SELECT * FROM ManufacturerEntity")
     suspend fun getAll(): List<ManufacturerEntity>
+
+    @Query("DELETE FROM ManufacturerEntity WHERE id = :id")
+    suspend fun deleteById(id: String)
 }
 
 @Dao
@@ -22,6 +25,9 @@ interface ElevatorModelDao {
 
     @Query("SELECT * FROM ElevatorModelEntity")
     suspend fun getAll(): List<ElevatorModelEntity>
+
+    @Query("DELETE FROM ElevatorModelEntity WHERE id = :id")
+    suspend fun deleteById(id: String)
 }
 
 @Dao
