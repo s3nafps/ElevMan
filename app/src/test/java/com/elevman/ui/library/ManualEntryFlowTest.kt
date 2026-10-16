@@ -96,6 +96,21 @@ class ManualEntryFlowTest {
         rule.onAllNodesWithText(text).fetchSemanticsNodes().isEmpty()
     }
 
+    /**
+     * Brings the task [name] into view on the model page. The tasks are the last section, below what a
+     * small screen builds, so the list has to be scrolled to them. It first waits for the thing that
+     * puts the task in the list: the view model has read the library again and holds it. (Waiting for a
+     * text that is on screen already, such as "Add code", returns at once and races that read.) Then it
+     * lets the composition settle and scrolls once.
+     */
+    private fun scrollToTask(name: String) {
+        rule.waitUntil(timeoutMillis = 10_000) {
+            library.state.value.detail?.tasks?.any { it.name == name } == true
+        }
+        rule.waitForIdle()
+        rule.onNode(hasScrollAction()).performScrollToNode(hasText(name))
+    }
+
     private fun storedCodes() = runBlocking { db.errorCodeDao().getAll() }
 
     private fun storedTasks() = runBlocking { db.maintenanceTaskDao().getAll() }
@@ -196,11 +211,7 @@ class ManualEntryFlowTest {
 
         rule.onNodeWithText("Save").performClick()
         waitUntilGone("Save")
-        // The tasks are the last section of the page, below what a small screen shows: scroll to it.
-        rule.waitUntil(timeoutMillis = 10_000) {
-            library.state.value.detail?.tasks?.any { it.name == "Inspect door rollers" } == true
-        }
-        rule.onNode(hasScrollAction()).performScrollToNode(hasText("Inspect door rollers"))
+        scrollToTask("Inspect door rollers")
 
         rule.onNodeWithText("Inspect door rollers").assertIsDisplayed()
         rule.onNodeWithText("Every 12 months").assertIsDisplayed()
@@ -296,8 +307,7 @@ class ManualEntryFlowTest {
             )
         }
         library.reload()
-        waitFor("Add code")
-        rule.onNode(hasScrollAction()).performScrollToNode(hasText("Check brake"))
+        scrollToTask("Check brake")
 
         rule.onNodeWithContentDescription("Edit maintenance task Check brake").performClick()
         field("Interval (months)").performTextClearance()
