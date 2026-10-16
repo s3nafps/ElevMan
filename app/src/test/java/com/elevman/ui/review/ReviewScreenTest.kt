@@ -267,6 +267,73 @@ class ReviewScreenTest {
     }
 
     @Test
+    fun aBlankCodeIsRefusedInTheEditDialogWithTheEnterTheCodeMessage() {
+        val saved = showEdit(EditTarget.Code("c1", "E-21", "Door fault", ""))
+
+        field("Code").performTextClearance()
+        rule.onNodeWithText("Save").performClick()
+
+        rule.onNodeWithText("Enter the code.").assertIsDisplayed()
+        rule.onNodeWithText("Enter a code with letters or numbers.").assertDoesNotExist()
+        assertTrue(saved.targets.isEmpty())
+    }
+
+    @Test
+    fun aCodeWithNoLetterOrDigitIsRefusedInTheEditDialogAndNothingIsSaved() {
+        val saved = showEdit(EditTarget.Code("c1", "E-21", "Door fault", ""))
+
+        // Normalized, each of these is empty: no search could ever find the code.
+        for (bad in listOf("-", "--", " . ", "- / -")) {
+            field("Code").performTextClearance()
+            field("Code").performTextInput(bad)
+            rule.onNodeWithText("Save").performClick()
+
+            rule.onNodeWithText("Enter a code with letters or numbers.").assertIsDisplayed()
+            rule.onNodeWithText("Enter the code.").assertDoesNotExist()
+            // Refused in the dialog: the screen, and so the repository, is never asked.
+            assertTrue("saved with code '$bad'", saved.targets.isEmpty())
+        }
+        assertEquals(0, saved.dismissed)
+    }
+
+    @Test
+    fun theNoLettersMessageGoesOnceALetterOrDigitIsTyped() {
+        showEdit(EditTarget.Code("c1", "E-21", "Door fault", ""))
+        field("Code").performTextClearance()
+        field("Code").performTextInput("-")
+        rule.onNodeWithText("Save").performClick()
+        rule.onNodeWithText("Enter a code with letters or numbers.").assertIsDisplayed()
+
+        field("Code").performTextClearance()
+        field("Code").performTextInput("E-2")
+
+        rule.onNodeWithText("Enter a code with letters or numbers.").assertDoesNotExist()
+    }
+
+    @Test
+    fun aValidEditedCodeStillSaves() {
+        val saved = showEdit(EditTarget.Code("c1", "E-21", "Door fault", ""))
+
+        // Dashes around letters and digits are fine (the key drops them); a plain number is a code too.
+        field("Code").performTextClearance()
+        field("Code").performTextInput("--e 22--")
+        rule.onNodeWithText("Save").performClick()
+        field("Code").performTextClearance()
+        field("Code").performTextInput("21")
+        rule.onNodeWithText("Save").performClick()
+
+        rule.onNodeWithText("Enter a code with letters or numbers.").assertDoesNotExist()
+        rule.onNodeWithText("Enter the code.").assertDoesNotExist()
+        assertEquals(
+            listOf<EditTarget>(
+                EditTarget.Code("c1", "--e 22--", "Door fault", ""),
+                EditTarget.Code("c1", "21", "Door fault", ""),
+            ),
+            saved.targets,
+        )
+    }
+
+    @Test
     fun editingATaskShowsNameAndIntervalInMonths() {
         showEdit(EditTarget.Task("t1", "Lubricate guide rails", 6))
 

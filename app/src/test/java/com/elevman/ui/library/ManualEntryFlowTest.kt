@@ -27,6 +27,7 @@ import com.elevman.data.ManufacturerEntity
 import com.elevman.data.ReviewRepository
 import com.elevman.data.ReviewStatus
 import com.elevman.ui.review.CHANGE_FAILED_MESSAGE
+import com.elevman.ui.review.EditTarget
 import com.elevman.ui.theme.ElevManTheme
 import java.time.Clock
 import kotlinx.coroutines.CoroutineScope
@@ -235,6 +236,31 @@ class ManualEntryFlowTest {
         assertEquals(ReviewStatus.CONFIRMED, stored.status)
         assertEquals("Door lock fault", stored.meaning)
         assertEquals("E22", stored.normalizedCode)
+    }
+
+    @Test
+    fun anEditedCodeThatNoSearchCouldFindIsRefusedAndNothingIsSaved() {
+        runBlocking {
+            db.errorCodeDao().upsertAll(
+                listOf(ErrorCodeEntity("c1", "m-gen2", "man-1", "E-21", "E21", "Door zone fault", "", 33, ReviewStatus.CONFIRMED, 1L)),
+            )
+        }
+        library.reload()
+        waitFor("Door zone fault")
+
+        rule.onNodeWithContentDescription("Edit error code E-21").performClick()
+        field("Code").performTextClearance()
+        field("Code").performTextInput("-")
+        rule.onNodeWithText("Save").performClick()
+
+        rule.onNodeWithText("Enter a code with letters or numbers.").assertIsDisplayed()
+        rule.onNodeWithText("Save").assertIsDisplayed()
+        // The view model never started a save, and the row is as it was.
+        assertEquals(false, library.state.value.entrySaving)
+        assertEquals(EditTarget.Code("c1", "E-21", "Door zone fault", ""), library.state.value.editing)
+        val stored = storedCodes().single()
+        assertEquals("E-21", stored.code)
+        assertEquals("E21", stored.normalizedCode)
     }
 
     @Test

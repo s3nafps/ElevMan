@@ -24,6 +24,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.elevman.domain.normalizeCode
 
 /** The fields of the item being corrected, and which item it is. */
 sealed interface EditTarget {
@@ -47,6 +48,7 @@ sealed interface EditTarget {
 
 internal const val INTERVAL_TOO_SMALL_MESSAGE = "Interval must be at least 1 month."
 internal const val CODE_REQUIRED_MESSAGE = "Enter the code."
+internal const val CODE_NEEDS_LETTERS_MESSAGE = "Enter a code with letters or numbers."
 internal const val NAME_REQUIRED_MESSAGE = "Enter a name."
 
 /**
@@ -56,13 +58,25 @@ internal const val NAME_REQUIRED_MESSAGE = "Enter a name."
  */
 internal fun validInterval(text: String): Int? = text.trim().toIntOrNull()?.takeIf { it >= 1 }
 
+/**
+ * What is wrong with the code typed in [code], or null when it is fine: [CODE_REQUIRED_MESSAGE] for a
+ * blank field, [CODE_NEEDS_LETTERS_MESSAGE] for a code with no letter and no digit in it (such as
+ * "-"), which normalizes to nothing, so no search could ever find it.
+ */
+internal fun codeProblem(code: String): String? = when {
+    code.isBlank() -> CODE_REQUIRED_MESSAGE
+    normalizeCode(code).isEmpty() -> CODE_NEEDS_LETTERS_MESSAGE
+    else -> null
+}
+
 // Well over the 48dp a finger needs.
 private val ButtonHeight = 48.dp
 
 /**
  * A dialog to correct one suggestion. It checks the fields itself: [onSave] is called only with
- * values the repository will accept (a task interval of at least 1 month, and a code or name that
- * is not empty), as a copy of [target] with the new values. Nothing is changed until then.
+ * values the repository will accept (a task interval of at least 1 month, a code a search could find,
+ * that is one with a letter or digit in it, and a name that is not empty), as a copy of [target] with
+ * the new values. Nothing is changed until then.
  *
  * [error] is shown inside the dialog, for a save the repository refused after [onSave]. The dialog
  * stays open and keeps what was typed.
@@ -85,14 +99,14 @@ private fun EditCodeDialog(target: EditTarget.Code, onSave: (EditTarget) -> Unit
     var code by rememberSaveable(target.id) { mutableStateOf(target.code) }
     var meaning by rememberSaveable(target.id) { mutableStateOf(target.meaning) }
     var causeAndFix by rememberSaveable(target.id) { mutableStateOf(target.causeAndFix) }
-    var codeMissing by rememberSaveable(target.id) { mutableStateOf(false) }
+    var codeError by rememberSaveable(target.id) { mutableStateOf<String?>(null) }
 
     DialogFrame(
         title = "Edit error code",
         onSave = {
-            if (code.isBlank()) {
-                codeMissing = true
-            } else {
+            val problem = codeProblem(code)
+            codeError = problem
+            if (problem == null) {
                 onSave(target.copy(code = code.trim(), meaning = meaning.trim(), causeAndFix = causeAndFix.trim()))
             }
         },
@@ -103,12 +117,12 @@ private fun EditCodeDialog(target: EditTarget.Code, onSave: (EditTarget) -> Unit
             value = code,
             onValueChange = {
                 code = it
-                codeMissing = false
+                codeError = null
             },
             label = { Text("Code") },
             singleLine = true,
-            isError = codeMissing,
-            supportingText = if (codeMissing) ({ Text(CODE_REQUIRED_MESSAGE) }) else null,
+            isError = codeError != null,
+            supportingText = codeError?.let { message -> { Text(message) } },
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
