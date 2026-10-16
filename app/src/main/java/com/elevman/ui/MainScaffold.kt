@@ -2,12 +2,9 @@ package com.elevman.ui
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
@@ -20,12 +17,11 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.elevman.AppContainer
+import com.elevman.ui.backup.BackupRoute
+import com.elevman.ui.elevators.ElevatorsRoute
 import com.elevman.ui.library.LibraryRoute
 import com.elevman.ui.library.LibraryViewModel
 import com.elevman.ui.search.SearchScreen
@@ -62,6 +58,12 @@ fun MainScaffold(
     val libraryViewModel: LibraryViewModel =
         viewModel(factory = LibraryViewModel.factory(container.db, container.review))
     val libraryState by libraryViewModel.state.collectAsStateWithLifecycle()
+
+    // The Library is read again whenever its tab is opened: a backup import on another tab can have
+    // changed it, and the view model outlives the tab.
+    LaunchedEffect(selected) {
+        if (selected == Tab.LIBRARY) libraryViewModel.reload()
+    }
 
     // A shared PDF is for the Library, whatever is open now.
     LaunchedEffect(incomingPdf) {
@@ -122,7 +124,8 @@ fun MainScaffold(
                     onOpenViewer = { manualId, page -> viewer = ViewerTarget(manualId, page) },
                     modifier = contentModifier,
                 )
-                else -> TabPlaceholder(tab = selected, modifier = contentModifier)
+                Tab.ELEVATORS -> ElevatorsRoute(container = container, modifier = contentModifier)
+                Tab.BACKUP -> BackupRoute(container = container, modifier = contentModifier)
             }
         }
     }
@@ -139,17 +142,3 @@ private val ViewerTargetSaver: Saver<ViewerTarget?, Any> = Saver(
         ViewerTarget(manualId as String, page as Int)
     },
 )
-
-/** A stand-in screen: just the tab's label as a title. Later tasks replace it. */
-@Composable
-private fun TabPlaceholder(tab: Tab, modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize()) {
-        Text(
-            text = tab.label,
-            style = MaterialTheme.typography.headlineMedium,
-            modifier = Modifier
-                .padding(16.dp)
-                .semantics { heading() },
-        )
-    }
-}

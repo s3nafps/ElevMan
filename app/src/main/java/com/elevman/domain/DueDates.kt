@@ -19,3 +19,9 @@ fun nextDueDate(startDate: LocalDate, lastDone: LocalDate?, intervalMonths: Int)
 
 /** A task is overdue only once its due date has passed, so a task due [today] is not overdue. */
 fun isOverdue(due: LocalDate, today: LocalDate): Boolean = due.isBefore(today)
+
+/**
+ * Whether a task or note may be recorded as done on [date]. Any day up to and including [today] is
+ * fine, so a late entry can be backdated; a date after [today] never is, because it has not happened.
+ */
+fun canMarkDone(date: LocalDate, today: LocalDate): Boolean = !date.isAfter(today)

@@ -3,8 +3,10 @@ package com.elevman
 import android.content.Context
 import androidx.room.Room
 import com.elevman.backup.BackupApplier
+import com.elevman.backup.BackupFiles
 import com.elevman.backup.BackupReader
 import com.elevman.backup.BackupWriter
+import com.elevman.backup.CacheBackupFiles
 import com.elevman.data.CodeSearch
 import com.elevman.data.ElevManDatabase
 import com.elevman.data.ElevatorRepository
@@ -34,7 +36,8 @@ class AppContainer(context: Context) {
     private val appContext: Context = context.applicationContext
 
     // The device time zone, so "today" (maintenance due dates, overdue) is the user's local date.
-    private val clock: Clock = Clock.systemDefaultZone()
+    // Shared with the screens that need "today" too, so they agree with the repository about it.
+    val clock: Clock = Clock.systemDefaultZone()
 
     private val filesDir: File = appContext.filesDir
 
@@ -78,6 +81,9 @@ class AppContainer(context: Context) {
     val backupReader: BackupReader = BackupReader(File(appContext.cacheDir, BACKUP_STAGING_DIR))
 
     val backupApplier: BackupApplier = BackupApplier(db, filesDir)
+
+    /** The picked backup's temporary copy and the export file, both under the cache directory. */
+    val backupFiles: BackupFiles = CacheBackupFiles(appContext.contentResolver, appContext.cacheDir, clock)
 
     private companion object {
         const val DATABASE_NAME = "elevman.db"

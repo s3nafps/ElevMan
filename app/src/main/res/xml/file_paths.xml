@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The only folder the app's FileProvider shares: the backup zip being sent through the share sheet.
+    CacheBackupFiles writes it at cacheDir/exports/. Nothing else in the cache (the staged PDFs of an
+    import, for one) is reachable through a content:// URI.
+-->
+<paths>
+    <cache-path
+        name="exports"
+        path="exports/" />
+</paths>
