@@ -34,7 +34,7 @@ jobs:
       - name: Install the Android platform and build tools the project uses
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
-          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;36.0.0"
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;36.0.0"
 
       - name: Run the unit tests
         run: ./gradlew :app:testDebugUnitTest --console=plain
