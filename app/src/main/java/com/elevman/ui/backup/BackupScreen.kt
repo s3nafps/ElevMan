@@ -60,7 +60,13 @@ fun BackupScreen(
         )
         val step = state.importStep
         if (step is ImportStep.Preview) {
-            BackupPreview(plan = step.plan, onApply = onApply, onCancel = onCancel, modifier = Modifier.weight(1f))
+            BackupPreview(
+                plan = step.plan,
+                onApply = onApply,
+                onCancel = onCancel,
+                exporting = state.writing,
+                modifier = Modifier.weight(1f),
+            )
         } else {
             Column(
                 verticalArrangement = Arrangement.spacedBy(32.dp),
@@ -156,10 +162,19 @@ private fun Alert(message: String) {
  * are updated, and how many keep your version. Every record that exists on both sides with different
  * content is listed with the side that won. [onApply] imports; [onCancel] leaves everything as it was.
  *
+ * While [exporting] (a backup is being written) Apply is off and a line says why: the export and the
+ * apply must not run together. Cancel stays available.
+ *
  * The buttons stay at the bottom while the list of records scrolls.
  */
 @Composable
-fun BackupPreview(plan: MergePlan, onApply: () -> Unit, onCancel: () -> Unit, modifier: Modifier = Modifier) {
+fun BackupPreview(
+    plan: MergePlan,
+    onApply: () -> Unit,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier,
+    exporting: Boolean = false,
+) {
     val kept = plan.overridden.count { it.winner == Side.LOCAL }
     Column(modifier = modifier.fillMaxSize()) {
         LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -193,18 +208,28 @@ fun BackupPreview(plan: MergePlan, onApply: () -> Unit, onCancel: () -> Unit, mo
                 HorizontalDivider()
             }
         }
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        Column(
+            verticalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth().padding(16.dp),
         ) {
-            OutlinedButton(
-                onClick = onCancel,
-                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-            ) { Text("Cancel") }
-            Button(
-                onClick = onApply,
-                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-            ) { Text("Apply") }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(
+                    onClick = onCancel,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                ) { Text("Cancel") }
+                Button(
+                    onClick = onApply,
+                    enabled = !exporting,
+                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                ) { Text("Apply") }
+            }
+            if (exporting) {
+                Text(
+                    text = "Finishing the backup export first.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+            }
         }
     }
 }

@@ -230,8 +230,13 @@ class BackupScreenTest {
 
     // ---- BackupPreview -------------------------------------------------------------------------
 
-    private fun showPreview(plan: MergePlan, onApply: () -> Unit = {}, onCancel: () -> Unit = {}) {
-        rule.setContent { ElevManTheme { BackupPreview(plan, onApply, onCancel) } }
+    private fun showPreview(
+        plan: MergePlan,
+        onApply: () -> Unit = {},
+        onCancel: () -> Unit = {},
+        exporting: Boolean = false,
+    ) {
+        rule.setContent { ElevManTheme { BackupPreview(plan, onApply, onCancel, exporting = exporting) } }
     }
 
     @Test
@@ -285,6 +290,47 @@ class BackupScreenTest {
         rule.onNodeWithText("0 updated").assertIsDisplayed()
         rule.onNodeWithText("0 kept your version").assertIsDisplayed()
         rule.onAllNodesWithText("Winner:", substring = true).assertCountEquals(0)
+    }
+
+    @Test
+    fun applyIsDisabledWithAReasonWhileAnExportIsBeingWritten() {
+        val plan = MergePlan(added = 2, updated = 0, overridden = emptyList())
+        rule.setContent {
+            ElevManTheme {
+                BackupScreen(
+                    BackupUiState(sizeBytes = 5_000_000L, writing = true, importStep = ImportStep.Preview(plan)),
+                    {}, {}, {}, {}, {},
+                )
+            }
+        }
+
+        rule.onNodeWithText("Apply").assertIsNotEnabled()
+        rule.onNodeWithText("Finishing the backup export first.").assertIsDisplayed()
+        // Cancel is not held up by the export.
+        rule.onNodeWithText("Cancel").assertIsEnabled()
+    }
+
+    @Test
+    fun applyIsEnabledAndNoReasonIsShownWhenNoExportIsRunning() {
+        val plan = MergePlan(added = 2, updated = 0, overridden = emptyList())
+        rule.setContent {
+            ElevManTheme {
+                BackupScreen(BackupUiState(importStep = ImportStep.Preview(plan)), {}, {}, {}, {}, {})
+            }
+        }
+
+        rule.onNodeWithText("Apply").assertIsEnabled()
+        rule.onAllNodesWithText("Finishing the backup export first.").assertCountEquals(0)
+    }
+
+    @Test
+    fun theTapOnADisabledApplyDoesNothing() {
+        val taps = mutableListOf<String>()
+        showPreview(MergePlan(1, 0, emptyList()), onApply = { taps += "apply" }, exporting = true)
+
+        rule.onNodeWithText("Apply").performClick()
+
+        assertTrue(taps.isEmpty())
     }
 
     @Test
