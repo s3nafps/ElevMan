@@ -1,9 +1,17 @@
 name: Release APK
 
 # Pushing a version tag such as v0.1.0 builds the release APK and publishes it as a GitHub release.
+# It can also be started by hand from the Actions tab; the release and its tag are then created from
+# the selected commit.
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, for example 0.1.0 (creates the tag v0.1.0)'
+        required: true
+        default: '0.1.0'
 
 permissions:
   contents: write
@@ -44,19 +52,25 @@ jobs:
           ELEVMAN_KEY_PASSWORD: ${{ secrets.ELEVMAN_KEY_PASSWORD }}
         run: ./gradlew :app:assembleRelease --console=plain
 
-      - name: Name the APK by its signing state
+      - name: Name the APK by its version and signing state
         id: apk
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then tag="$GITHUB_REF_NAME"; else tag="v$INPUT_VERSION"; fi
           if [ "$HAS_RELEASE_KEY" = "true" ]; then suffix=""; else suffix="-debug-signed"; fi
           mkdir -p "$RUNNER_TEMP/out"
-          out="$RUNNER_TEMP/out/ElevMan-${GITHUB_REF_NAME}${suffix}.apk"
+          out="$RUNNER_TEMP/out/ElevMan-${tag}${suffix}.apk"
           cp app/build/outputs/apk/release/app-release.apk "$out"
           echo "path=$out" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
       - name: Publish the GitHub release
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ steps.apk.outputs.path }}
+          tag_name: ${{ steps.apk.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           prerelease: ${{ env.HAS_RELEASE_KEY != 'true' }}
           body: |
             ElevMan release build. Install the APK by sideloading it (allow installs from this source).
