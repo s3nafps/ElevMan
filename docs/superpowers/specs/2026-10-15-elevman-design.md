@@ -108,5 +108,5 @@ Design for field use: large tap targets, high-contrast text readable in bright l
 ## 12. Assumptions to verify
 
 - Manuals are mostly text-based PDFs. Test with real samples before committing to the extraction library.
-- The team's phones are Android 10 or later.
+- The team's phones are Android 8.0 or later (the app's minimum SDK is 26).
 - Manual volume is dozens to a few hundred PDFs.

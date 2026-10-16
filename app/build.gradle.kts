@@ -11,7 +11,10 @@ android {
 
     defaultConfig {
         applicationId = "com.elevman"
-        minSdk = 29
+        // Android 8.0. At minSdk 26 the build emits dex 038, which Android 8 can read. minSdk 29 emitted
+        // dex 039, which needs Android 9 or later. java.time is part of the platform from API 26, so no
+        // desugaring is needed.
+        minSdk = 26
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
@@ -115,7 +118,7 @@ dependencies {
     // from debugImplementation below, so this line has no effect today.
     testImplementation(libs.androidx.compose.ui.test.manifest)
 
-    // Instrumented tests (need a device or emulator running Android 10 or later).
+    // Instrumented tests (need a device or emulator running Android 8.0 or later).
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.test.runner)
