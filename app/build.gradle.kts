@@ -19,9 +19,30 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // The release key is never stored in the repository. CI or a local build supplies it through
+    // environment variables. Without ELEVMAN_KEYSTORE_PATH the release APK falls back to the debug
+    // key so it can still be installed for testing, and Gradle prints a warning.
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("ELEVMAN_KEYSTORE_PATH")
+            if (keystorePath != null) {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("ELEVMAN_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ELEVMAN_KEY_ALIAS")
+                keyPassword = System.getenv("ELEVMAN_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = if (System.getenv("ELEVMAN_KEYSTORE_PATH") != null) {
+                signingConfigs.getByName("release")
+            } else {
+                logger.warn("ELEVMAN_KEYSTORE_PATH is not set: the release APK is signed with the debug key (test builds only).")
+                signingConfigs.getByName("debug")
+            }
         }
     }
 

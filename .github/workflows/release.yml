@@ -1,0 +1,64 @@
+name: Release APK
+
+# Pushing a version tag such as v0.1.0 builds the release APK and publishes it as a GitHub release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # 'true' only when the repository secrets hold a release keystore.
+      HAS_RELEASE_KEY: ${{ secrets.ELEVMAN_KEYSTORE_BASE64 != '' && 'true' || 'false' }}
+      KEYSTORE_B64: ${{ secrets.ELEVMAN_KEYSTORE_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install the Android platform and build tools the project uses
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37" "build-tools;36.0.0"
+
+      - name: Run the unit tests
+        run: ./gradlew :app:testDebugUnitTest --console=plain
+
+      - name: Decode the release keystore
+        if: env.HAS_RELEASE_KEY == 'true'
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "ELEVMAN_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      - name: Build the release APK
+        env:
+          ELEVMAN_KEYSTORE_PASSWORD: ${{ secrets.ELEVMAN_KEYSTORE_PASSWORD }}
+          ELEVMAN_KEY_ALIAS: ${{ secrets.ELEVMAN_KEY_ALIAS }}
+          ELEVMAN_KEY_PASSWORD: ${{ secrets.ELEVMAN_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --console=plain
+
+      - name: Name the APK by its signing state
+        id: apk
+        run: |
+          if [ "$HAS_RELEASE_KEY" = "true" ]; then suffix=""; else suffix="-debug-signed"; fi
+          mkdir -p "$RUNNER_TEMP/out"
+          out="$RUNNER_TEMP/out/ElevMan-${GITHUB_REF_NAME}${suffix}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$out"
+          echo "path=$out" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.apk.outputs.path }}
+          prerelease: ${{ env.HAS_RELEASE_KEY != 'true' }}
+          body: |
+            ElevMan release build. Install the APK by sideloading it (allow installs from this source).
+
+            An asset named ...-debug-signed.apk is a test build signed with a non-release key. Installing a build with a different signature over an existing one requires uninstalling the earlier version first.
