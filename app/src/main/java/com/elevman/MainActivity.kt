@@ -24,7 +24,7 @@ class MainActivity : ComponentActivity() {
         // the content out from under them.
         enableEdgeToEdge()
         // A recreated activity (a rotation) gets the same intent again; the PDF was taken the first time.
-        if (savedInstanceState == null) incomingPdf = pdfFrom(intent)
+        if (savedInstanceState == null) takeSharedPdf(intent)
         val container = (application as ElevManApp).container
         setContent {
             ElevManTheme {
@@ -34,11 +34,23 @@ class MainActivity : ComponentActivity() {
     }
 
     // The activity is singleTop, so a PDF shared while it is on screen arrives here, not in a second
-    // copy of the app. It goes to the same import step as a PDF shared at start-up. The intent is not
-    // stored with setIntent: nothing reads it after onCreate, and a recreated activity ignores it.
+    // copy of the app. It goes through the same handler as a PDF shared at start-up.
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        pdfFrom(intent)?.let { incomingPdf = it }
+        // getIntent() is the latest intent, as for any activity that can be started again while open.
+        setIntent(intent)
+        takeSharedPdf(intent)
+    }
+
+    /**
+     * Hands the PDF that [intent] carries, if any, to the import step. Used for the intent that starts
+     * the activity and for every one that arrives later. Returns whether [intent] carried a PDF; an
+     * intent without one (a tap on the launcher icon) changes nothing.
+     */
+    internal fun takeSharedPdf(intent: Intent): Boolean {
+        val pdf = pdfFrom(intent) ?: return false
+        incomingPdf = pdf
+        return true
     }
 }
 
