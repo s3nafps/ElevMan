@@ -42,6 +42,7 @@ import com.elevman.data.ElevatorModelEntity
 import com.elevman.data.ManualEntity
 import com.elevman.data.ManufacturerEntity
 import com.elevman.domain.canMarkDone
+import com.elevman.ui.HoldNextIo
 import com.elevman.ui.theme.ElevManTheme
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -53,9 +54,13 @@ import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.UUID
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -66,6 +71,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -85,13 +91,26 @@ private class FakeFiles(private val pickedDir: File, private val exportsDir: Fil
     val threads = ConcurrentLinkedQueue<Thread>()
     private var exports = 0
 
+    /** How many times each was asked for. */
+    val copies = AtomicInteger()
+    val exportFiles = AtomicInteger()
+
+    /** While set, `newExportFile` waits for it: an export that is under way and does not finish. */
+    @Volatile
+    var exportGate: CountDownLatch? = null
+    val exportStarted = CountDownLatch(1)
+
     override fun copyPicked(uri: Uri): File {
+        copies.incrementAndGet()
         threads += Thread.currentThread()
         val from = source ?: throw IOException("cannot open $uri")
         return File(pickedDir, UUID.randomUUID().toString() + ".zip").also { from.copyTo(it) }
     }
 
     override fun newExportFile(): File {
+        exportFiles.incrementAndGet()
+        exportStarted.countDown()
+        exportGate?.await(10, TimeUnit.SECONDS)
         threads += Thread.currentThread()
         exportsDir.mkdirs()
         return File(exportsDir, "backup-${exports++}.zip")
@@ -154,7 +173,8 @@ class BackupScreenTest {
     private fun viewModel(
         read: (File) -> ReadResult = reader::read,
         applier: BackupApplier = this.applier,
-    ) = BackupViewModel(writer, applier, fakeFiles, read, scope)
+        io: CoroutineDispatcher = Dispatchers.IO,
+    ) = BackupViewModel(writer, applier, fakeFiles, read, scope, io)
 
     private fun show(viewModel: BackupViewModel) {
         rule.setContent {
@@ -703,6 +723,141 @@ class BackupScreenTest {
         assertTrue(viewModel.state.value.importStep is ImportStep.Preview)
         assertEquals(1, fakeFiles.threads.size)
         assertEquals(1, stagedFolders().size)
+    }
+
+    // ---- Export and apply never overlap -----------------------------------------------------------
+
+    @Test
+    fun shareIsDisabledWhileAnImportIsBeingApplied() {
+        rule.setContent {
+            ElevManTheme {
+                BackupScreen(BackupUiState(sizeBytes = 5_000_000L, importStep = ImportStep.Applying), {}, {}, {}, {}, {})
+            }
+        }
+
+        rule.onNodeWithText("Share backup").assertIsNotEnabled()
+    }
+
+    @Test
+    fun importIsDisabledWhileAnExportIsBeingWritten() {
+        rule.setContent {
+            ElevManTheme {
+                BackupScreen(BackupUiState(sizeBytes = 5_000_000L, writing = true), {}, {}, {}, {}, {})
+            }
+        }
+
+        rule.onNodeWithText("Import backup").assertIsNotEnabled()
+    }
+
+    @Test
+    fun shareAndImportAreBothAvailableWhenNothingIsRunning() {
+        rule.setContent {
+            ElevManTheme {
+                BackupScreen(BackupUiState(sizeBytes = 5_000_000L), {}, {}, {}, {}, {})
+            }
+        }
+
+        rule.onNodeWithText("Share backup").assertIsEnabled()
+        rule.onNodeWithText("Import backup").assertIsEnabled()
+    }
+
+    @Test
+    fun shareIsRefusedWhileAnImportIsBeingApplied() {
+        fakeFiles.source = validBackup()
+        val applyGate = CountDownLatch(1)
+        // The apply stops at its first table until the test lets it go.
+        val stalled = BackupApplier(db, filesDir, onWrite = { applyGate.await(10, TimeUnit.SECONDS) })
+        val viewModel = viewModel(applier = stalled)
+        viewModel.importBackup(picked)
+        viewModel.settled { it.importStep is ImportStep.Preview }
+        viewModel.applyImport()
+        assertEquals(ImportStep.Applying, viewModel.state.value.importStep)
+
+        viewModel.share()
+
+        assertFalse(viewModel.state.value.writing)
+        assertEquals("no export file was started", 0, fakeFiles.exportFiles.get())
+        applyGate.countDown()
+        viewModel.settled { it.importStep == ImportStep.Notice(BACKUP_IMPORTED_MESSAGE) }
+        // Once the apply is over, sharing works again.
+        viewModel.share()
+        assertNotNull(viewModel.settled { it.shareFile != null }.shareFile)
+    }
+
+    @Test
+    fun importIsRefusedWhileAnExportIsBeingWritten() {
+        seedOneManualWithItsPdf()
+        fakeFiles.source = validBackup()
+        val exportGate = CountDownLatch(1)
+        fakeFiles.exportGate = exportGate
+        val viewModel = viewModel()
+        viewModel.share()
+        assertTrue("the export started", fakeFiles.exportStarted.await(10, TimeUnit.SECONDS))
+        assertTrue(viewModel.state.value.writing)
+
+        viewModel.importBackup(picked)
+
+        assertEquals(ImportStep.Idle, viewModel.state.value.importStep)
+        assertEquals("the picked file was not copied", 0, fakeFiles.copies.get())
+        exportGate.countDown()
+        viewModel.settled { it.shareFile != null }
+        // Once the export is over, an import can start.
+        viewModel.importBackup(picked)
+        viewModel.settled { it.importStep is ImportStep.Preview }
+    }
+
+    @Test
+    fun applyIsRefusedWhileAnExportIsBeingWritten() {
+        fakeFiles.source = validBackup()
+        val viewModel = viewModel()
+        viewModel.importBackup(picked)
+        viewModel.settled { it.importStep is ImportStep.Preview }
+        val exportGate = CountDownLatch(1)
+        fakeFiles.exportGate = exportGate
+        viewModel.share()
+        assertTrue("the export started", fakeFiles.exportStarted.await(10, TimeUnit.SECONDS))
+
+        viewModel.applyImport()
+
+        // Still waiting in the preview, with its staging intact; nothing was applied.
+        assertTrue(viewModel.state.value.importStep is ImportStep.Preview)
+        assertEquals(1, stagedFolders().size)
+        assertEquals(emptyList<ManualEntity>(), runBlocking { db.manualDao().getAll() })
+        exportGate.countDown()
+        viewModel.settled { it.shareFile != null }
+        viewModel.applyImport()
+        viewModel.settled { it.importStep == ImportStep.Notice(BACKUP_IMPORTED_MESSAGE) }
+    }
+
+    @Test
+    fun aSecondImportStartedAfterACancelKeepsItsStaging() {
+        fakeFiles.source = validBackup()
+        val io = HoldNextIo()
+        val viewModel = viewModel(io = io)
+        viewModel.importBackup(picked)
+        viewModel.settled { it.importStep is ImportStep.Preview }
+        val first = stagedFolders().single()
+
+        // The cancel's delete of the first folder is kept waiting on the IO side...
+        io.holdNext()
+        viewModel.cancelImport()
+        io.awaitHeld()
+        // ...while a second import reads the same file and reaches its preview.
+        viewModel.importBackup(picked)
+        viewModel.settled { it.importStep is ImportStep.Preview }
+        val second = stagedFolders().single { it != first }
+
+        // Now the delete runs. It must remove the first folder, the one that was cancelled, and not the second.
+        io.releaseHeld()
+        val deadline = System.nanoTime() + 10_000_000_000L
+        while (File(stagingRoot, first).exists() && System.nanoTime() < deadline) Thread.sleep(5)
+        assertFalse("the cancelled folder is gone", File(stagingRoot, first).exists())
+        assertNotEquals(first, second)
+        assertTrue("the second import's staging survived", File(stagingRoot, second).isDirectory)
+        // And the second preview still imports.
+        viewModel.applyImport()
+        viewModel.settled { it.importStep == ImportStep.Notice(BACKUP_IMPORTED_MESSAGE) }
+        assertEquals(listOf(manual), runBlocking { db.manualDao().getAll() })
     }
 
     // ---- Off the main thread ------------------------------------------------------------------

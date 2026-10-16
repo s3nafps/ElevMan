@@ -132,11 +132,14 @@ class BackupViewModel(
     }
 
     /**
-     * Writes the zip to a new file. Ignored while one is being written. The screen offers this only
-     * once the size is shown, so the person has seen how big the file will be.
+     * Writes the zip to a new file. Ignored while one is being written, and while an import is being
+     * applied: an export reads every table and PDF, and an apply is replacing them, so the zip could
+     * mix the two. The screen offers this only once the size is shown, so the person has seen how big
+     * the file will be.
      */
     fun share() {
-        if (state.value.writing) return
+        val now = state.value
+        if (now.writing || now.importStep is ImportStep.Applying) return
         mutableState.update { it.copy(writing = true, exportError = null) }
         scope.launch {
             // Not interrupted: a half-written zip would have to be cleaned up either way.
@@ -184,10 +187,14 @@ class BackupViewModel(
 
     // ---- Import --------------------------------------------------------------------------------
 
-    /** Starts the import of the file the person picked. Ignored while an import is under way or previewed. */
+    /**
+     * Starts the import of the file the person picked. Ignored while an import is under way or
+     * previewed, and while an export is being written.
+     */
     fun importBackup(uri: Uri) {
         val step = state.value.importStep
         if (step is ImportStep.Reading || step is ImportStep.Preview || step is ImportStep.Applying) return
+        if (state.value.writing) return
         mutableState.update { it.copy(importStep = ImportStep.Reading) }
         scope.launch {
             // Not interrupted: a backup that was read must reach the preview, or have its staging deleted here.
@@ -240,9 +247,12 @@ class BackupViewModel(
         pending.getAndSet(null)?.valid?.stagingDir?.deleteRecursively()
     }
 
-    /** Applies the previewed backup. Does nothing unless a preview is showing. */
+    /**
+     * Applies the previewed backup. Does nothing unless a preview is showing, and nothing while an
+     * export is being written (the preview waits).
+     */
     fun applyImport() {
-        if (state.value.importStep !is ImportStep.Preview) return
+        if (state.value.importStep !is ImportStep.Preview || state.value.writing) return
         val held = pending.getAndSet(null) ?: return
         mutableState.update { it.copy(importStep = ImportStep.Applying) }
         scope.launch {
@@ -268,11 +278,18 @@ class BackupViewModel(
         }
     }
 
-    /** Leaves the preview without importing anything, and deletes the staged backup. */
+    /**
+     * Leaves the preview without importing anything, and deletes the staged backup. The backup is
+     * taken here, on the main thread, and that very folder is what the IO side deletes. Looking the
+     * pending backup up again later would delete the staging of an import started in the meantime.
+     */
     fun cancelImport() {
         if (state.value.importStep !is ImportStep.Preview) return
+        val cancelled = pending.getAndSet(null)
         mutableState.update { it.copy(importStep = ImportStep.Idle) }
-        scope.launch { withContext(NonCancellable + io) { discardPending() } }
+        if (cancelled != null) {
+            scope.launch { withContext(NonCancellable + io) { cancelled.valid.stagingDir.deleteRecursively() } }
+        }
     }
 
     /** Closes the message an import ended with. */

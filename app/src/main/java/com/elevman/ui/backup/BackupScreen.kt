@@ -71,7 +71,7 @@ fun BackupScreen(
             ) {
                 // The two sections are labelled, but not as headings: the tab's title is the screen's one heading.
                 ExportSection(state, onShare)
-                ImportSection(step, onImport, onDismiss)
+                ImportSection(step, exporting = state.writing, onImport = onImport, onDismiss = onDismiss)
             }
         }
     }
@@ -94,15 +94,17 @@ private fun ExportSection(state: BackupUiState, onShare: () -> Unit) {
         state.exportError?.let { Alert(it) }
         Button(
             onClick = onShare,
-            // Only once the size is on screen, so a very big backup is never a surprise.
-            enabled = sizeBytes != null && !state.estimating && !state.writing,
+            // Only once the size is on screen, so a very big backup is never a surprise. Not while an
+            // import is being applied: the zip would mix the old data and the new.
+            enabled = sizeBytes != null && !state.estimating && !state.writing &&
+                state.importStep != ImportStep.Applying,
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         ) { Text("Share backup") }
     }
 }
 
 @Composable
-private fun ImportSection(step: ImportStep, onImport: () -> Unit, onDismiss: () -> Unit) {
+private fun ImportSection(step: ImportStep, exporting: Boolean, onImport: () -> Unit, onDismiss: () -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Import", style = MaterialTheme.typography.titleLarge)
         Text(
@@ -123,7 +125,8 @@ private fun ImportSection(step: ImportStep, onImport: () -> Unit, onDismiss: () 
         }
         Button(
             onClick = onImport,
-            enabled = step == ImportStep.Idle || step is ImportStep.Notice,
+            // Not while the backup is being written: the import would change what is being exported.
+            enabled = (step == ImportStep.Idle || step is ImportStep.Notice) && !exporting,
             modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         ) { Text("Import backup") }
     }

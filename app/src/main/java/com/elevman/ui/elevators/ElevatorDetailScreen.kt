@@ -48,16 +48,18 @@ internal const val NOTHING_TO_ASSIGN_MESSAGE =
  * [ElevatorViewModel] holds the rest.
  *
  * [today] says what today is when a date picker opens. [onMarkDone] gets the elevator task and the
- * date the person picked, and [onAddNote] the date and the text of a note.
+ * date the person picked, [onAddNote] the date and the text of a note, and [onAssign] the task chosen.
+ * Each returns whether the change was accepted: a dialog closes only then, so a refused change (say,
+ * another one is still being saved) leaves the dialog open, with what was typed, to try again.
  */
 @Composable
 fun ElevatorDetailScreen(
     detail: ElevatorDetail?,
     loaded: Boolean,
     today: () -> LocalDate,
-    onMarkDone: (elevatorTaskId: String, date: LocalDate) -> Unit,
-    onAddNote: (date: LocalDate, note: String) -> Unit,
-    onAssign: (maintenanceTaskId: String) -> Unit,
+    onMarkDone: (elevatorTaskId: String, date: LocalDate) -> Boolean,
+    onAddNote: (date: LocalDate, note: String) -> Boolean,
+    onAssign: (maintenanceTaskId: String) -> Boolean,
     modifier: Modifier = Modifier,
 ) {
     when {
@@ -77,9 +79,9 @@ fun ElevatorDetailScreen(
 private fun DetailContent(
     detail: ElevatorDetail,
     today: () -> LocalDate,
-    onMarkDone: (String, LocalDate) -> Unit,
-    onAddNote: (LocalDate, String) -> Unit,
-    onAssign: (String) -> Unit,
+    onMarkDone: (String, LocalDate) -> Boolean,
+    onAddNote: (LocalDate, String) -> Boolean,
+    onAssign: (String) -> Boolean,
     modifier: Modifier,
 ) {
     // Which dialog is open. The task is kept by id, so a list that reloads under the dialog is no problem.
@@ -117,8 +119,7 @@ private fun DetailContent(
         PastDatePickerDialog(
             today = now,
             onConfirm = { date ->
-                markDoneTaskId = null
-                onMarkDone(taskId, date)
+                if (onMarkDone(taskId, date)) markDoneTaskId = null
             },
             onDismiss = { markDoneTaskId = null },
         )
@@ -127,8 +128,7 @@ private fun DetailContent(
         AssignTaskDialog(
             choices = detail.assignable,
             onAssign = { id ->
-                assigning = false
-                onAssign(id)
+                if (onAssign(id)) assigning = false
             },
             onDismiss = { assigning = false },
         )
@@ -137,8 +137,7 @@ private fun DetailContent(
         AddNoteDialog(
             today = remember { today() },
             onSave = { date, note ->
-                noting = false
-                onAddNote(date, note)
+                if (onAddNote(date, note)) noting = false
             },
             onDismiss = { noting = false },
         )

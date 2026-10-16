@@ -1,6 +1,7 @@
 package com.elevman.ui.elevators
 
 import android.content.Context
+import android.os.Looper
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -10,10 +11,17 @@ import com.elevman.data.ElevatorRepository
 import com.elevman.data.MaintenanceTaskEntity
 import com.elevman.data.ManufacturerEntity
 import com.elevman.data.ReviewStatus
+import com.elevman.ui.HoldNextIo
 import java.time.Clock
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.ZoneOffset
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.atomic.AtomicInteger
+import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.seconds
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,6 +37,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Shadows.shadowOf
 
 /** Runs the view model on real threads against an in-memory database; every wait has a timeout. */
 @RunWith(AndroidJUnit4::class)
@@ -42,7 +51,8 @@ class ElevatorViewModelTest {
     @Before
     fun setUp() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        db = Room.inMemoryDatabaseBuilder(context, ElevManDatabase::class.java).allowMainThreadQueries().build()
+        // No allowMainThreadQueries: a blocking query on the main thread would fail.
+        db = Room.inMemoryDatabaseBuilder(context, ElevManDatabase::class.java).build()
         scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         runBlocking {
             db.manufacturerDao().upsertAll(listOf(ManufacturerEntity("mk-1", "Otis", 1L)))
@@ -78,11 +88,13 @@ class ElevatorViewModelTest {
     private fun viewModel(
         repositoryDate: LocalDate = today,
         viewModelDate: LocalDate = today,
+        io: CoroutineDispatcher = Dispatchers.IO,
     ) = ElevatorViewModel(
         db = db,
         repository = ElevatorRepository(db, clockOn(repositoryDate)),
         clock = clockOn(viewModelDate),
         scope = scope,
+        io = io,
     )
 
     private fun ElevatorViewModel.settled(done: (ElevatorUiState) -> Boolean = { true }): ElevatorUiState =
@@ -213,17 +225,91 @@ class ElevatorViewModelTest {
     }
 
     @Test
-    fun assigningTheSameTaskTwiceKeepsOneRow() {
+    fun assigningATaskTheElevatorAlreadyHasIsRefusedAndChangesNothing() {
+        seedElevator("e1", "Port tower")
+        val viewModel = viewModel()
+        openDetail(viewModel, "e1")
+        assertTrue(viewModel.assignTask("t-brake"))
+        viewModel.settled { it.detail?.tasks?.size == 1 && !it.busy }
+
+        // The repository would keep one row anyway (Task 11); the view model does not even ask.
+        assertFalse(viewModel.assignTask("t-brake"))
+
+        assertEquals(TASK_NOT_AVAILABLE_MESSAGE, viewModel.state.value.message)
+        assertEquals(1, runBlocking { db.elevatorTaskDao().getAll() }.size)
+    }
+
+    @Test
+    fun aTaskThatIsNotInTheAssignableListIsRefusedWithAMessage() {
         seedElevator("e1", "Port tower")
         val viewModel = viewModel()
         openDetail(viewModel, "e1")
 
-        viewModel.assignTask("t-brake")
-        viewModel.settled { it.detail?.tasks?.size == 1 }
-        viewModel.assignTask("t-brake")
-        viewModel.settled { it.detail?.tasks?.size == 1 && !it.busy }
+        // Another model's task, a suggestion nobody confirmed, and an id that does not exist.
+        for (id in listOf("t-alpha", "t-suggested", "no-such-task")) {
+            viewModel.dismissMessage()
+            assertFalse(id, viewModel.assignTask(id))
+            assertEquals(id, TASK_NOT_AVAILABLE_MESSAGE, viewModel.state.value.message)
+        }
 
-        assertEquals(1, runBlocking { db.elevatorTaskDao().getAll() }.size)
+        assertEquals(emptyList<Any>(), runBlocking { db.elevatorTaskDao().getAll() })
+        assertFalse(viewModel.state.value.busy)
+    }
+
+    @Test
+    fun aChangeWhileAnotherIsBeingSavedIsRefusedWithAMessage() {
+        seedElevator("e1", "Port tower")
+        val io = HoldNextIo()
+        val viewModel = viewModel(io = io)
+        openDetail(viewModel, "e1")
+
+        // The first save is accepted and kept waiting on the IO side.
+        io.holdNext()
+        assertTrue(viewModel.assignTask("t-brake"))
+        io.awaitHeld()
+        assertTrue(viewModel.state.value.busy)
+
+        // A second tap in the meantime is not dropped silently.
+        assertFalse(viewModel.assignTask("t-rails"))
+        assertEquals(BUSY_MESSAGE, viewModel.state.value.message)
+
+        io.releaseHeld()
+        val detail = viewModel.settled { it.detail?.tasks?.size == 1 && !it.busy }.detail!!
+        assertEquals(listOf("Check brake"), detail.tasks.map { it.taskName })
+        assertEquals(listOf("t-brake"), runBlocking { db.elevatorTaskDao().getAll() }.map { it.maintenanceTaskId })
+    }
+
+    @Test
+    fun markingDoneAndAddingANoteAreRefusedWhileBusyToo() {
+        seedElevator("e1", "Port tower")
+        val io = HoldNextIo()
+        val viewModel = viewModel(io = io)
+        openDetail(viewModel, "e1")
+        viewModel.assignTask("t-brake")
+        val taskId = viewModel.settled { it.detail?.tasks?.size == 1 && !it.busy }.detail!!.tasks.single().elevatorTaskId
+        io.holdNext()
+        assertTrue(viewModel.addNote(today, "first"))
+        io.awaitHeld()
+
+        assertFalse(viewModel.markDone(taskId, today))
+        assertEquals(BUSY_MESSAGE, viewModel.state.value.message)
+        viewModel.dismissMessage()
+        assertFalse(viewModel.addNote(today, "second"))
+        assertEquals(BUSY_MESSAGE, viewModel.state.value.message)
+
+        io.releaseHeld()
+        viewModel.settled { it.detail?.log?.size == 1 && !it.busy }
+        assertEquals(listOf("first"), runBlocking { db.logEntryDao().getAll() }.map { it.note })
+    }
+
+    @Test
+    fun aRefusedFutureDateReturnsFalse() {
+        seedElevator("e1", "Port tower")
+        val viewModel = viewModel()
+        openDetail(viewModel, "e1")
+
+        assertFalse(viewModel.addNote(today.plusDays(1), "later"))
+        assertTrue(viewModel.addNote(today, "now"))
     }
 
     @Test
@@ -331,5 +417,74 @@ class ElevatorViewModelTest {
         // Back on the list does nothing.
         viewModel.back()
         assertEquals(listOf<ElevatorPage>(ElevatorPage.Overview), viewModel.state.value.pages)
+    }
+
+    // ---- R18h: the list is loaded on IO, not on the main thread --------------------------------
+
+    /** Records the thread of every instant it is asked for. */
+    private class ProbeClock(private val delegate: Clock, val threads: ConcurrentLinkedQueue<Thread>) : Clock() {
+        override fun getZone() = delegate.zone
+        override fun withZone(zone: ZoneId): Clock = ProbeClock(delegate.withZone(zone), threads)
+        override fun instant(): Instant {
+            threads += Thread.currentThread()
+            return delegate.instant()
+        }
+    }
+
+    /** `Dispatchers.IO`, but it counts what it is given and notes the thread each block runs on. */
+    private class RecordingIo : CoroutineDispatcher() {
+        val dispatched = AtomicInteger()
+        val threads = ConcurrentLinkedQueue<Thread>()
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            dispatched.incrementAndGet()
+            Dispatchers.IO.dispatch(context, Runnable {
+                threads += Thread.currentThread()
+                block.run()
+            })
+        }
+    }
+
+    private fun idleMainLooperUntil(condition: () -> Boolean) {
+        val deadline = System.nanoTime() + 10_000_000_000L
+        while (!condition() && System.nanoTime() < deadline) {
+            shadowOf(Looper.getMainLooper()).idle()
+            Thread.sleep(10)
+        }
+        assertTrue("the condition was not met in time", condition())
+    }
+
+    @Test
+    fun theElevatorListAndDetailAreLoadedOnIoAndNotOnTheMainThread() {
+        seedElevator("e1", "Port tower")
+        val main = Looper.getMainLooper().thread
+        val io = RecordingIo()
+        val repositoryThreads = ConcurrentLinkedQueue<Thread>()
+        // The scope the app uses: everything starts on the main thread, so only the view model's own
+        // switch to the IO dispatcher keeps the reads off it. The database has no allowMainThreadQueries.
+        val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+        try {
+            val viewModel = ElevatorViewModel(
+                db = db,
+                repository = ElevatorRepository(db, ProbeClock(clockOn(today), repositoryThreads)),
+                clock = clockOn(today),
+                scope = mainScope,
+                io = io,
+            )
+
+            // The list, loaded when the view model is made.
+            idleMainLooperUntil { viewModel.state.value.loaded }
+            assertEquals(listOf("Port tower"), viewModel.state.value.groups.map { it.site })
+            assertTrue("the list was loaded through the IO dispatcher", io.dispatched.get() >= 1)
+
+            // The detail, which asks the repository for the due dates and the log.
+            viewModel.openElevator("e1")
+            idleMainLooperUntil { viewModel.state.value.detail?.id == "e1" }
+            assertTrue("the repository was asked", repositoryThreads.isNotEmpty())
+            assertTrue("the repository ran off the main thread", repositoryThreads.none { it === main })
+        } finally {
+            mainScope.cancel()
+        }
+        assertTrue("every IO block ran off the main thread", io.threads.isNotEmpty() && io.threads.none { it === main })
     }
 }

@@ -41,16 +41,19 @@ class AddNoteTest {
         assignable = emptyList(),
     )
 
-    private fun show(notes: MutableList<Pair<LocalDate, String>>) {
+    private fun show(notes: MutableList<Pair<LocalDate, String>>, accept: Boolean = true) {
         rule.setContent {
             ElevManTheme {
                 ElevatorDetailScreen(
                     detail = detail,
                     loaded = true,
                     today = { today },
-                    onMarkDone = { _, _ -> },
-                    onAddNote = { date, note -> notes += date to note },
-                    onAssign = {},
+                    onMarkDone = { _, _ -> true },
+                    onAddNote = { date, note ->
+                        notes += date to note
+                        accept
+                    },
+                    onAssign = { true },
                 )
             }
         }
@@ -78,6 +81,21 @@ class AddNoteTest {
 
         rule.onNodeWithText("Save").assertIsNotEnabled()
         assertTrue(notes.isEmpty())
+    }
+
+    @Test
+    fun theNoteDialogStaysOpenWithItsTextWhenTheChangeIsRefused() {
+        val notes = mutableListOf<Pair<LocalDate, String>>()
+        show(notes, accept = false)
+        rule.onNodeWithText("Add note").performClick()
+        rule.onNode(hasSetTextAction()).performTextInput("Replaced the door roller")
+
+        rule.onNodeWithText("Save").performClick()
+
+        assertEquals(listOf(today to "Replaced the door roller"), notes)
+        // Refused (say, another save is running): the dialog and what was typed are still there.
+        rule.onNodeWithText("Save").assertIsDisplayed()
+        rule.onNodeWithText("Replaced the door roller").assertIsDisplayed()
     }
 
     @Test

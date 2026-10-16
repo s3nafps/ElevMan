@@ -31,6 +31,8 @@ import kotlinx.coroutines.withContext
 internal const val NO_SITE = "No site"
 internal const val FUTURE_DATE_MESSAGE = "Choose today or an earlier date."
 internal const val ELEVATOR_SAVE_FAILED_MESSAGE = "Could not save. Try again."
+internal const val BUSY_MESSAGE = "Still saving the last change. Try again in a moment."
+internal const val TASK_NOT_AVAILABLE_MESSAGE = "That task cannot be assigned to this elevator."
 
 private const val UNKNOWN_MODEL = "Unknown model"
 private const val REMOVED_TASK = "Removed task"
@@ -92,8 +94,13 @@ data class ElevatorUiState(
  * still running, so what is shown is the latest.
  *
  * Marking a task done and adding a note both refuse a date after today ([canMarkDone]) before the
- * repository is called, so the repository never sees one. [clock] says what today is, and should be
- * the clock [repository] uses.
+ * repository is called, so the repository never sees one. Assigning a task is refused unless the task
+ * is in the elevator's current assignable list. [clock] says what today is, and should be the clock
+ * [repository] uses.
+ *
+ * Every change returns whether it was accepted. A refused one (a future date, a task that cannot be
+ * assigned, another change still being saved) sets [ElevatorUiState.message] and returns false, so
+ * the screen keeps its dialog open instead of dropping the tap.
  *
  * [scope] ends when the view model is cleared. It defaults to the main thread.
  */
@@ -166,32 +173,41 @@ class ElevatorViewModel(
     // ---- Changes -------------------------------------------------------------------------------
 
     /** Saves a new elevator, then returns to the list. Site and model are required by the form, not here. */
-    fun addElevator(site: String, customer: String, modelId: String, serialNumber: String, notes: String) {
+    fun addElevator(site: String, customer: String, modelId: String, serialNumber: String, notes: String): Boolean =
         change(
             write = {
                 repository.addElevator(site.trim(), customer.trim(), modelId, serialNumber.trim(), notes.trim())
             },
             after = { it.copy(pages = it.pages.filterNot { page -> page == ElevatorPage.AddElevator }) },
         )
-    }
 
     /** Records that the elevator task [elevatorTaskId] was done on [date]. A date after today is refused. */
-    fun markDone(elevatorTaskId: String, date: LocalDate) {
-        if (refuseFuture(date)) return
-        change(write = { repository.markDone(elevatorTaskId, date, "") })
+    fun markDone(elevatorTaskId: String, date: LocalDate): Boolean {
+        if (refuseFuture(date)) return false
+        return change(write = { repository.markDone(elevatorTaskId, date, "") })
     }
 
     /** Adds a note to the log of the open elevator. A date after today is refused. */
-    fun addNote(date: LocalDate, note: String) {
-        val elevatorId = openElevatorId() ?: return
-        if (refuseFuture(date)) return
-        change(write = { repository.addNote(elevatorId, date, note.trim()) })
+    fun addNote(date: LocalDate, note: String): Boolean {
+        val elevatorId = openElevatorId() ?: return false
+        if (refuseFuture(date)) return false
+        return change(write = { repository.addNote(elevatorId, date, note.trim()) })
     }
 
-    /** Assigns a maintenance task to the open elevator. Assigning one it already has changes nothing. */
-    fun assignTask(maintenanceTaskId: String) {
-        val elevatorId = openElevatorId() ?: return
-        change(write = { repository.assignTask(elevatorId, maintenanceTaskId) })
+    /**
+     * Assigns a maintenance task to the open elevator, if it is one of the tasks the elevator can
+     * still be given (see [ElevatorDetail.assignable]); any other id is refused with a message. The
+     * dialog that lists the choices is not relied on. The repository would also keep a single row for
+     * a task the elevator already has.
+     */
+    fun assignTask(maintenanceTaskId: String): Boolean {
+        val elevatorId = openElevatorId() ?: return false
+        val detail = state.value.detail
+        if (detail == null || detail.id != elevatorId || detail.assignable.none { it.id == maintenanceTaskId }) {
+            mutableState.update { it.copy(message = TASK_NOT_AVAILABLE_MESSAGE) }
+            return false
+        }
+        return change(write = { repository.assignTask(elevatorId, maintenanceTaskId) })
     }
 
     private fun openElevatorId(): String? =
@@ -204,9 +220,15 @@ class ElevatorViewModel(
         return true
     }
 
-    /** Runs [write] on [io], then [after] on the state and a reload. One change at a time; a second tap is ignored. */
-    private fun change(write: suspend () -> Unit, after: (ElevatorUiState) -> ElevatorUiState = { it }) {
-        if (state.value.busy) return
+    /**
+     * Runs [write] on [io], then [after] on the state and a reload, and returns true. One change at a
+     * time: while another is being saved this changes nothing, shows [BUSY_MESSAGE] and returns false.
+     */
+    private fun change(write: suspend () -> Unit, after: (ElevatorUiState) -> ElevatorUiState = { it }): Boolean {
+        if (state.value.busy) {
+            mutableState.update { it.copy(message = BUSY_MESSAGE) }
+            return false
+        }
         mutableState.update { it.copy(busy = true) }
         scope.launch {
             val failed = try {
@@ -223,6 +245,7 @@ class ElevatorViewModel(
             }
             reload()
         }
+        return true
     }
 
     // ---- Reading -------------------------------------------------------------------------------

@@ -128,16 +128,31 @@ class ElevatorsScreenTest {
         val assigned = mutableListOf<String>()
     }
 
-    private fun showDetail(detail: ElevatorDetail? = this.detail, loaded: Boolean = true, taps: Taps = Taps()): Taps {
+    // [accept] is what the view model answers: false means it refused the change.
+    private fun showDetail(
+        detail: ElevatorDetail? = this.detail,
+        loaded: Boolean = true,
+        taps: Taps = Taps(),
+        accept: Boolean = true,
+    ): Taps {
         rule.setContent {
             ElevManTheme {
                 ElevatorDetailScreen(
                     detail = detail,
                     loaded = loaded,
                     today = { today },
-                    onMarkDone = { id, date -> taps.done += id to date },
-                    onAddNote = { date, note -> taps.notes += date to note },
-                    onAssign = { taps.assigned += it },
+                    onMarkDone = { id, date ->
+                        taps.done += id to date
+                        accept
+                    },
+                    onAddNote = { date, note ->
+                        taps.notes += date to note
+                        accept
+                    },
+                    onAssign = {
+                        taps.assigned += it
+                        accept
+                    },
                 )
             }
         }
@@ -206,6 +221,19 @@ class ElevatorsScreenTest {
     }
 
     @Test
+    fun theAssignDialogStaysOpenWhenTheChangeIsRefused() {
+        val taps = showDetail(accept = false)
+
+        rule.onNodeWithText("Assign task").performClick()
+        rule.onNodeWithText("Check door roller", substring = true).performClick()
+
+        assertEquals(listOf("t-door"), taps.assigned)
+        // Refused (say, another save is running): the choices are still there to tap again.
+        rule.onNodeWithText("Check door roller", substring = true).assertIsDisplayed()
+        rule.onNodeWithText("Test alarm bell", substring = true).assertIsDisplayed()
+    }
+
+    @Test
     fun assignTaskWithNothingLeftToAssignSaysSo() {
         showDetail(detail.copy(assignable = emptyList()))
 
@@ -239,6 +267,17 @@ class ElevatorsScreenTest {
         rule.onNodeWithText("October 15, 2026", substring = true).assertIsEnabled()
         rule.onNodeWithText("October 17, 2026", substring = true).assertIsNotEnabled()
         rule.onNodeWithText("October 31, 2026", substring = true).assertIsNotEnabled()
+    }
+
+    @Test
+    fun theDatePickerStaysOpenWhenTheChangeIsRefused() {
+        val taps = showDetail(accept = false)
+
+        rule.onAllNodesWithText("Mark done")[0].performClick()
+        rule.onNodeWithText("OK").performClick()
+
+        assertEquals(listOf("et-1" to today), taps.done)
+        rule.onNodeWithText("OK").assertIsDisplayed()
     }
 
     @Test
