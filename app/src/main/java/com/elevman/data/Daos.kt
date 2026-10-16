@@ -53,6 +53,9 @@ interface ErrorCodeDao {
     @Query("SELECT * FROM ErrorCodeEntity WHERE manualId = :manualId AND status = :status")
     suspend fun findByManualAndStatus(manualId: String, status: ReviewStatus): List<ErrorCodeEntity>
 
+    @Query("SELECT * FROM ErrorCodeEntity WHERE modelId = :modelId AND status = :status")
+    suspend fun findByModelAndStatus(modelId: String, status: ReviewStatus): List<ErrorCodeEntity>
+
     @Query("SELECT * FROM ErrorCodeEntity WHERE normalizedCode = :key AND status != :excluded")
     suspend fun findByKeyExcludingStatus(key: String, excluded: ReviewStatus): List<ErrorCodeEntity>
 }
@@ -70,6 +73,9 @@ interface MaintenanceTaskDao {
 
     @Query("SELECT * FROM MaintenanceTaskEntity WHERE manualId = :manualId AND status = :status")
     suspend fun findByManualAndStatus(manualId: String, status: ReviewStatus): List<MaintenanceTaskEntity>
+
+    @Query("SELECT * FROM MaintenanceTaskEntity WHERE modelId = :modelId AND status = :status")
+    suspend fun findByModelAndStatus(modelId: String, status: ReviewStatus): List<MaintenanceTaskEntity>
 }
 
 @Dao

@@ -29,7 +29,11 @@ class ReviewRepository(
     private val codes get() = db.errorCodeDao()
     private val tasks get() = db.maintenanceTaskDao()
 
-    /** The items of [manualId] still waiting for review, ordered by page, then by label. */
+    /**
+     * The items of [manualId] still waiting for review, ordered by page, then by label, then by kind
+     * (error codes before maintenance tasks), then by id. The last two make the order the same
+     * every time, whatever order the database returns the rows in.
+     */
     suspend fun suggestedFor(manualId: String): List<ReviewItem> {
         val codeItems = codes.findByManualAndStatus(manualId, ReviewStatus.SUGGESTED).map {
             ReviewItem(ItemKind.ERROR_CODE, it.id, it.code, it.meaning, it.pageNumber)
@@ -37,7 +41,7 @@ class ReviewRepository(
         val taskItems = tasks.findByManualAndStatus(manualId, ReviewStatus.SUGGESTED).map {
             ReviewItem(ItemKind.MAINTENANCE_TASK, it.id, it.name, "every ${it.intervalMonths} months", it.pageNumber)
         }
-        return (codeItems + taskItems).sortedWith(compareBy({ it.pageNumber }, { it.label }))
+        return (codeItems + taskItems).sortedWith(compareBy({ it.pageNumber }, { it.label }, { it.kind }, { it.id }))
     }
 
     /** How many error codes and maintenance tasks of [manualId] are still waiting for review. */

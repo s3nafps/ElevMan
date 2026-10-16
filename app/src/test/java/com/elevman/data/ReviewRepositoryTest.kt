@@ -311,6 +311,27 @@ class ReviewRepositoryTest {
     }
 
     @Test
+    fun suggestedForBreaksTiesByKindThenId() = runTest {
+        // Everything is on page 3 and has the label "Same", so only kind and id can order it.
+        // Rows go in with the ids in reverse, so the database's own order cannot pass for the answer.
+        seed(
+            codes = listOf(
+                code("c-b", "A", code = "Same", page = 3),
+                code("c-a", "A", code = "Same", page = 3),
+            ),
+            tasks = listOf(
+                task("t-b", "A", name = "Same", page = 3),
+                task("t-a", "A", name = "Same", page = 3),
+            ),
+        )
+
+        val ids = repo.suggestedFor("A").map { it.id }
+
+        // Error codes before maintenance tasks, then by id inside each kind.
+        assertEquals(listOf("c-a", "c-b", "t-a", "t-b"), ids)
+    }
+
+    @Test
     fun suggestedForReturnsOnlySuggestedItemsOfThatManual() = runTest {
         seed(
             codes = listOf(
